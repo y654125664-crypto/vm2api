@@ -446,18 +446,42 @@ function PoolImportDialog({
           ? `${prefix.trim().replace(/[-_]+$/, '')}-${String(i + 1).padStart(2, '0')}`
           : ''
         try {
+          // 0) 去重前置判定：命中自己的号 → 覆盖（沿用号位与用量）；命中他人 → 跳过。
+          const check = await api<{
+            action: 'new' | 'replace' | 'blocked'
+            vm_id?: string | null
+          }>('/api/panel/pool/check', {
+            method: 'POST',
+            body: JSON.stringify({ kind: 'raw', credential: line }),
+          })
+          let vmId: string | undefined
+          if (check.action === 'blocked') {
+            outcomes.push({
+              label: label || `第 ${i + 1} 行`,
+              ok: false,
+              message: '该凭据已被其他号位使用',
+            })
+            setResults([...outcomes])
+            continue
+          }
           // 1) 建号位：服务端盖 owner 戳 + 吃自建配额 + 自动从我的代理池分配出口。
-          const created = await api<{ item?: Vm; id?: string }>(
-            '/api/panel/vms/create',
-            {
-              method: 'POST',
-              body: JSON.stringify(
-                label ? { name: label, auto_allocate_proxy: proxyMode === 'auto' } : { auto_allocate_proxy: proxyMode === 'auto' },
-              ),
-            },
-          )
-          const vmId = created?.item?.id ?? created?.id
-          if (!vmId) throw new Error('创建号位失败：未返回 vm id')
+          if (check.action === 'replace' && check.vm_id) {
+            vmId = check.vm_id
+          } else {
+            const created = await api<{ item?: Vm; id?: string }>(
+              '/api/panel/vms/create',
+              {
+                method: 'POST',
+                body: JSON.stringify(
+                  label
+                    ? { name: label, auto_allocate_proxy: proxyMode === 'auto' }
+                    : { auto_allocate_proxy: proxyMode === 'auto' },
+                ),
+              },
+            )
+            vmId = created?.item?.id ?? created?.id
+            if (!vmId) throw new Error('创建号位失败：未返回 vm id')
+          }
           // 2) 导入凭据（字段映射对齐 vm/credential-panel.tsx）。
           const body: Record<string, unknown> = { vm_id: vmId }
           if (kind === 'apikey') {
@@ -478,10 +502,17 @@ function PoolImportDialog({
             if (SESSION_KEY_PREFIX.test(line)) body.session_key = line
             else body.access_token = line
           }
-          await api('/api/panel/vms/import', {
-            method: 'POST',
-            body: JSON.stringify(body),
-          })
+          const imported = await api<{ duplicate_of?: string | null }>(
+            '/api/panel/vms/import',
+            { method: 'POST', body: JSON.stringify(body) },
+          )
+          // 替换竞态兜底：后端判重命中自己号位 → 删掉刚建的空号位，沿用原号。
+          if (imported?.duplicate_of && vmId !== imported.duplicate_of) {
+            await api(`/api/panel/vms/${encodeURIComponent(vmId)}`, {
+              method: 'DELETE',
+            }).catch(() => undefined)
+            vmId = imported.duplicate_of
+          }
           // 3) 手动模式：按行 1:1 绑定粘贴的出口 IP。
           if (proxyMode === 'manual' && proxies[i]) {
             await api('/api/panel/proxies/import', {
@@ -489,7 +520,12 @@ function PoolImportDialog({
               body: JSON.stringify({ text: proxies[i], bind_vm_id: vmId }),
             })
           }
-          outcomes.push({ label: label || vmId, ok: true, message: '已入池' })
+          outcomes.push({
+            label: label || vmId,
+            ok: true,
+            message:
+              check.action === 'replace' ? '已覆盖（沿用原号）' : '已入池',
+          })
         } catch (e) {
           outcomes.push({
             label: label || `第 ${i + 1} 行`,

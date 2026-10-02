@@ -92,6 +92,10 @@ import {
   normalizeOwnerId,
   vmOriginOf,
 } from './resource-owner.mjs'
+import {
+  credentialFingerprint,
+  resolveImportDuplicate,
+} from './credential-fingerprint.mjs'
 import { logsToCsv, logsToJsonl } from './request-log.mjs'
 import {
   listVms,
@@ -828,6 +832,22 @@ export function createPanelHandler(ctx) {
       }
       if (req.method === 'GET' && p === '/api/panel/vendor-settings') {
         return json(res, 200, panel.ok(vendorSettingsOf(panelUsers)))
+      }
+      // POST /api/panel/pool/check — 凭据去重前置判定（号池上号弹窗批量用）。
+      // { kind: 'raw', credential } → { action: new | replace | blocked, vm_id? }
+      if (req.method === 'POST' && p === '/api/panel/pool/check') {
+        const body = await readBody(req, 64 * 1024)
+        const credential = String(body.credential || '').trim()
+        const fingerprint = credentialFingerprint(credential)
+        const ident = panelIdentity(req)
+        const result = resolveImportDuplicate({
+          fingerprint,
+          vms: listVms(cfg.paths.project),
+          ownerId:
+            ident.role === 'user' ? normalizeOwnerId(req.panelUserId) : null,
+          role: ident.role,
+        })
+        return json(res, 200, panel.ok(result))
       }
       if (req.method === 'PATCH' && p === '/api/panel/vendor-settings') {
         const body = await readBody(req, 8192).catch(() => ({}))
@@ -2809,6 +2829,32 @@ export function createPanelHandler(ctx) {
               })
             }
           }
+          // 凭据去重（护栏）：同一原始凭据已在其他号位上 → 拒绝，防止批量上号/并发
+          // 把同一个号灌进两个号位。自己号位的覆盖走 /api/panel/pool/check 前置判定。
+          const rawCredential = String(apiKeyRaw || sessionKey || accessToken || '').trim()
+          const rawFingerprint = credentialFingerprint(rawCredential)
+          if (importIdent.role === 'user' && rawFingerprint) {
+            const clash = listVms(cfg.paths.project).find(
+              (item) =>
+                item.credential_fingerprint === rawFingerprint && item.id !== vmId,
+            )
+            if (clash) {
+              const clashOwner = String(clash.owner_user_id || '').trim()
+              const clashIsOwn =
+                clashOwner && clashOwner === normalizeOwnerId(req.panelUserId) &&
+                vmOriginOf(clash) === VM_ORIGIN.userCreated
+              if (!clashIsOwn) {
+                return json(res, 403, {
+                  ok: false,
+                  error: {
+                    type: 'permission_error',
+                    code: 'credential_in_use',
+                    message: '该凭据已被其他号位使用，不能重复上号',
+                  },
+                })
+              }
+            }
+          }
           if (isCodexVm(existing)) {
             const parsed = parseCodexImportPayload(body)
             if (!parsed.ok) {
@@ -2927,6 +2973,23 @@ export function createPanelHandler(ctx) {
           if (oauth.access_token && !wantsApiKey) {
             oauth = await enrichOauthIdentity(oauth, { proxyUrl })
           }
+          // 盖凭据指纹：同一原始凭据重复上号的判定锚点（commit 落库时随 existing 持久化）。
+          existing.credential_fingerprint = rawFingerprint
+          existing.credential_kind = wantsApiKey
+            ? 'apikey'
+            : sessionKey
+              ? 'session-key'
+              : 'access-token'
+          // 命中自己已有号位时告诉前端沿用原号（前端据此删掉刚建的空号位）。
+          const duplicateOf = resolveImportDuplicate({
+            fingerprint: rawFingerprint,
+            vms: listVms(cfg.paths.project).filter((item) => item.id !== vmId),
+            ownerId:
+              importIdent.role === 'user'
+                ? normalizeOwnerId(req.panelUserId)
+                : null,
+            role: importIdent.role,
+          })
           const committed = await commitImportedOauth({
             vmId,
             vmPath,
@@ -2947,6 +3010,8 @@ export function createPanelHandler(ctx) {
               oauth_email: existing.claude.email,
               has_refresh: existing.claude.has_refresh,
               official_cc_bootstrap: committed.official_cc_bootstrap || null,
+              duplicate_of:
+                duplicateOf.action === 'replace' ? duplicateOf.vm_id : null,
             }),
           )
         } catch (e) {
