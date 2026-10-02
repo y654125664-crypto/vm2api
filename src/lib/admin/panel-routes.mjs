@@ -90,6 +90,7 @@ import {
   clampVmCreateQuota,
   countUserCreatedVms,
   normalizeOwnerId,
+  vmOriginOf,
 } from './resource-owner.mjs'
 import { logsToCsv, logsToJsonl } from './request-log.mjs'
 import {
@@ -2758,6 +2759,20 @@ export function createPanelHandler(ctx) {
           }
           const existing = JSON.parse(fs.readFileSync(vmPath, 'utf8'))
           existing.id = existing.id || vmId
+          // Import is a body-id route, so the generic per-vm path guard in
+          // panel-tenant.mjs never sees it — enforce tenant ownership here.
+          const importIdent = panelIdentity(req)
+          if (importIdent.role === 'user') {
+            const owner = normalizeOwnerId(req.panelUserId)
+            const vmIsOwnedByUser =
+              !!owner && normalizeOwnerId(existing.owner_user_id) === owner && vmOriginOf(existing) === VM_ORIGIN.userCreated
+            if (!vmIsOwnedByUser) {
+              return json(res, 403, {
+                ok: false,
+                error: { code: 'forbidden', message: '只能向自己创建的虚拟机导入凭据' },
+              })
+            }
+          }
           if (isCodexVm(existing)) {
             const parsed = parseCodexImportPayload(body)
             if (!parsed.ok) {
