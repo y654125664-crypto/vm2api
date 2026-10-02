@@ -76,6 +76,7 @@ import { startProbeTest, getProbeTest, listProbeTests, cancelProbeTest, getProbe
 import { publicKeyView } from './api-keys.mjs'
 import { publicEndpointView, fetchUpstreamModels, API_ENDPOINT_PRESETS } from './api-endpoints.mjs'
 import { publicUserView } from './panel-users.mjs'
+import { registerVendor, saveVendorSettings, vendorSettingsOf } from './vendor.mjs'
 import { authorizePanelRoute, mePayload, panelIdentity } from './panel-acl.mjs'
 import {
   denyIfUserCannotDeleteVm,
@@ -688,6 +689,24 @@ export function createPanelHandler(ctx) {
     }
 
     // ========== Panel login (public) ==========
+    if (req.method === 'POST' && p === '/api/panel/register') {
+      const body = await readBody(req, 4096)
+      try {
+        const rec = registerVendor(panelUsers, {
+          username: body.username || body.user,
+          password: body.password || body.pass,
+          contact: body.contact,
+        })
+        return json(res, 201, panel.ok({ item: rec }))
+      } catch (e) {
+        const status =
+          e.code === 'username_exists' || e.code === 'registration_closed' || e.code === 'invalid_role' ? 409 : 400
+        return json(res, status, {
+          ok: false,
+          error: { message: String(e.message || e), code: e.code || 'register_failed' },
+        })
+      }
+    }
     if (req.method === 'POST' && p === '/api/panel/login') {
       const body = await readBody(req, 4096)
       const username = body.username || body.user || body.u || ''
@@ -805,6 +824,13 @@ export function createPanelHandler(ctx) {
       }
       if (req.method === 'GET' && p === '/api/panel/users') {
         return json(res, 200, panel.ok({ items: panelUsers.list() }))
+      }
+      if (req.method === 'GET' && p === '/api/panel/vendor-settings') {
+        return json(res, 200, panel.ok(vendorSettingsOf(panelUsers)))
+      }
+      if (req.method === 'PATCH' && p === '/api/panel/vendor-settings') {
+        const body = await readBody(req, 8192).catch(() => ({}))
+        return json(res, 200, panel.ok(saveVendorSettings(panelUsers, body || {})))
       }
       if (req.method === 'POST' && p === '/api/panel/users') {
         const body = await readBody(req, 8192).catch(() => ({}))

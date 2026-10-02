@@ -110,6 +110,7 @@ export function publicUserView(rec) {
     role: rec.role,
     enabled: rec.enabled !== false,
     vm_create_quota: clampVmCreateQuota(rec.vm_create_quota, 0),
+    vendor_share: Number(rec.vendor_share) || 0,
     created_at: rec.created_at,
     updated_at: rec.updated_at,
     last_login_at: rec.last_login_at || null,
@@ -160,7 +161,7 @@ export class PanelUserStore {
     return publicUserView(next)
   }
 
-  create({ username, password, role = 'user', enabled = true, vm_create_quota = 0 } = {}) {
+  create({ username, password, role = 'user', enabled = true, vm_create_quota = 0, vendor_share = 0, notes = '' } = {}) {
     const name = assertUsername(username)
     if (this.repo.getByUsername(name)) {
       const err = new Error('用户名已存在')
@@ -174,6 +175,8 @@ export class PanelUserStore {
       role: assertRole(role),
       enabled: enabled !== false,
       vm_create_quota: clampVmCreateQuota(vm_create_quota, 0),
+      vendor_share: Number(vendor_share) || 0,
+      notes: typeof notes === 'string' ? notes.slice(0, 500) : '',
       created_at: nowIso(),
       updated_at: nowIso(),
       last_login_at: null,
@@ -217,6 +220,16 @@ export class PanelUserStore {
 
     if (patch.vm_create_quota != null) {
       next.vm_create_quota = clampVmCreateQuota(patch.vm_create_quota, rec.vm_create_quota || 0)
+    }
+
+    if (patch.vendor_share != null) {
+      const n = Number(patch.vendor_share)
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        const err = new Error('分成比例必须在 0–100 之间')
+        err.code = 'invalid_vendor_share'
+        throw err
+      }
+      next.vendor_share = n
     }
 
     next.updated_at = nowIso()
