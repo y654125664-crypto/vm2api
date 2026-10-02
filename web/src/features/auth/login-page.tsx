@@ -41,7 +41,15 @@ export function LoginPage() {
         window.location.hash = next.replace(/^#/, '')
         return
       }
-      await navigate({ to: '/overview' })
+      // Land on the first view the server grants this role — tenants/vendors
+      // have no overview (dashboard is admin-only and would 403).
+      const views = result.views ?? []
+      const landing = views.includes('overview')
+        ? '/overview'
+        : views.length > 0
+          ? `/${views[0]}`
+          : '/overview'
+      await navigate({ to: landing })
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败')
     } finally {

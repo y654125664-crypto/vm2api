@@ -152,7 +152,7 @@ export async function loginRequest(input: {
   username: string
   password: string
   base?: string
-}): Promise<{ token: string; user: string }> {
+}): Promise<{ token: string; user: string; views?: string[] }> {
   const base = input.base ?? apiBase()
   const url = `${base || ''}/api/panel/login`
   let res: Response
@@ -174,11 +174,13 @@ export async function loginRequest(input: {
   const json = (await res.json().catch(() => ({}))) as {
     token?: string
     user?: string
-    data?: { token?: string; user?: string }
+    views?: string[]
+    data?: { token?: string; user?: string; views?: string[] }
     error?: { message?: string }
     message?: string
   }
-  const token = json.token || json.data?.token || ''
+  const data = json.data ?? json
+  const token = json.token || data.token || ''
   if (!res.ok || !token) {
     throw new ApiError(
       json.error?.message ||
@@ -187,7 +189,11 @@ export async function loginRequest(input: {
       res.status
     )
   }
-  return { token, user: json.user || json.data?.user || input.username }
+  return {
+    token,
+    user: json.user || data.user || input.username,
+    views: Array.isArray(json.views) ? json.views : data.views,
+  }
 }
 
 export function logoutRequest() {

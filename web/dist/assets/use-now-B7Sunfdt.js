@@ -1,0 +1,1 @@
+import{F as e,R as t}from"./button-Cbehlaek.js";var n=t(e(),1);function r(e=3e4){let[t,r]=(0,n.useState)(()=>Date.now());return(0,n.useEffect)(()=>{let t=setInterval(()=>r(Date.now()),e);return()=>clearInterval(t)},[e]),t}export{r as t};
