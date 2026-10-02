@@ -876,6 +876,8 @@ export function createPanelHandler(ctx) {
             role: body.role || 'user',
             enabled: body.enabled !== false,
             vm_create_quota: body.vm_create_quota,
+            vendor_share: body.vendor_share,
+            notes: body.notes || body.contact,
           })
           return json(res, 201, panel.ok({ item: publicUserView(rec) }))
         } catch (e) {

@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { loginRequest } from '@/lib/api'
 import { apiBase, sameOriginPanel, setApiBase } from '@/lib/session'
+import { RegisterVendorDialog } from '@/features/auth/register-dialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -18,6 +19,7 @@ export function LoginPage() {
   const [base, setBase] = useState(apiBase())
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [registerOpen, setRegisterOpen] = useState(false)
   const hideBase = sameOriginPanel()
 
   async function onSubmit(event: React.FormEvent) {
@@ -90,9 +92,26 @@ export function LoginPage() {
             <Button className='w-full' type='submit' disabled={pending}>
               {pending ? '登录中…' : '登录'}
             </Button>
+            <Button
+              className='w-full'
+              type='button'
+              variant='ghost'
+              onClick={() => setRegisterOpen(true)}
+            >
+              供应商注册
+            </Button>
           </form>
         </CardContent>
       </Card>
+      <RegisterVendorDialog
+        open={registerOpen}
+        onOpenChange={setRegisterOpen}
+        base={base}
+        hideBase={hideBase}
+        onRegistered={(registered) => {
+          if (registered) setUsername(registered)
+        }}
+      />
     </div>
   )
 }

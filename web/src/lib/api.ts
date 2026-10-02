@@ -196,3 +196,38 @@ export function logoutRequest() {
     () => undefined
   )
 }
+
+/** Public vendor self-registration — the only unauthenticated POST on the panel. */
+export async function registerVendorRequest(input: {
+  username: string
+  password: string
+  contact?: string
+  base?: string
+}): Promise<void> {
+  const base = input.base ?? apiBase()
+  const url = `${base || ''}/api/panel/register`
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: input.username,
+        password: input.password,
+        contact: input.contact ?? '',
+      }),
+    })
+  } catch {
+    throw new ApiError(`无法连接注册服务: ${url}`)
+  }
+  const json = (await res.json().catch(() => ({}))) as {
+    ok?: boolean
+    error?: { message?: string; code?: string }
+  }
+  if (!res.ok || json.ok === false) {
+    throw new ApiError(json.error?.message || `注册失败 HTTP ${res.status}`, res.status, {
+      code: json.error?.code,
+    })
+  }
+}

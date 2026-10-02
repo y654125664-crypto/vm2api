@@ -57,3 +57,18 @@ test('settings round-trip and invalid shares fall back', () => {
   assert.equal(s2.default_share, 100)
   assert.equal(VENDOR_REGISTRATION_SETTING, 'vendor_registration')
 })
+
+test('admin create passes vendor share + contact notes, update patches notes', () => {
+  const { store } = tmpStore()
+  const rec = store.create({
+    username: 'vendor3',
+    password: 'longenough',
+    role: 'user',
+    vendor_share: 45,
+    notes: '微信: v3',
+  })
+  assert.equal(rec.vendor_share, 45)
+  const patched = store.update(rec.id, { notes: 'tg:@v3', vendor_share: 60 })
+  assert.equal(patched.notes, 'tg:@v3')
+  assert.equal(patched.vendor_share, 60)
+})

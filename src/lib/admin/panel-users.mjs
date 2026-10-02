@@ -232,6 +232,10 @@ export class PanelUserStore {
       next.vendor_share = n
     }
 
+    if (patch.notes != null) {
+      next.notes = String(patch.notes).slice(0, 500)
+    }
+
     next.updated_at = nowIso()
     return this.repo.update(next)
   }
