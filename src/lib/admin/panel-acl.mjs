@@ -204,6 +204,7 @@ function isUserAllowed(method, path) {
   const p = String(path || '')
   if (m === 'GET' && (USER_EXACT_GET.has(p) || isRequestLogPath(p))) return true
   if (m === 'POST' && USER_EXACT_POST.has(p)) return true
+  if (m === 'POST' && p === '/api/panel/pool/check') return true
   if (p.startsWith('/api/panel/vms')) return userVmPathAllowed(m, p)
   if (p.startsWith('/api/panel/proxies')) return userProxyPathAllowed(m, p)
   if (p.startsWith('/api/panel/api-keys')) return userKeyPathAllowed(m, p)
