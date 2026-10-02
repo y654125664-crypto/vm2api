@@ -440,6 +440,46 @@ export class UsageLogsRepo {
   }
 
   /**
+   * Per-owner totals for vendor payout reporting. Owner is attributed the
+   * same way as ownerPred (direct user_id → api key owner → vm owner), but
+   * grouped across all owners; NULL-owned (platform) rows are excluded.
+   * @returns {Array<{owner_user_id, requests, errors, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_cost}>}
+   */
+  aggregateByOwner({ since = null, until = null } = {}) {
+    const { cond, params } = timeCond(since, until)
+    let where = `u.user_id IS NOT NULL OR COALESCE(ak.user_id, '') != '' OR v.owner_user_id IS NOT NULL`
+    if (cond) where = `(${cond}) AND (${where})`
+    const rows = this.db
+      .prepare(`
+      SELECT COALESCE(u.user_id, ak.user_id, v.owner_user_id) AS owner,
+             COUNT(*) AS requests,
+             SUM(CASE WHEN (u.status >= 400 OR (u.error_code IS NOT NULL AND u.error_code != '' AND u.error_code NOT IN (${IGNORED_CODES_SQL}))) THEN 1 ELSE 0 END) AS errors,
+             COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
+             COALESCE(SUM(u.cache_creation_tokens), 0) AS cache_creation_tokens,
+             COALESCE(SUM(u.total_cost), 0) AS total_cost
+      FROM usage_logs u
+      LEFT JOIN api_keys ak ON ak.id = u.api_key_id
+      LEFT JOIN vms v ON v.id = u.vm_id
+      ${where ? `WHERE ${where}` : ''}
+      GROUP BY owner HAVING owner IS NOT NULL
+      ORDER BY total_cost DESC
+    `)
+      .all(...params)
+    return rows.map((r) => ({
+      owner_user_id: r.owner,
+      requests: Number(r.requests) || 0,
+      errors: Number(r.errors) || 0,
+      input_tokens: Number(r.input_tokens) || 0,
+      output_tokens: Number(r.output_tokens) || 0,
+      cache_read_tokens: Number(r.cache_read_tokens) || 0,
+      cache_creation_tokens: Number(r.cache_creation_tokens) || 0,
+      total_cost: Number(r.total_cost) || 0,
+    }))
+  }
+
+  /**
    * Aggregate stats bucketed by day or hour (dashboard/usage charts).
    * @returns {Array<{bucket, requests, errors, input_tokens, output_tokens, avg_duration_ms}>}
    */

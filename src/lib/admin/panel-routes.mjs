@@ -76,6 +76,7 @@ import { startProbeTest, getProbeTest, listProbeTests, cancelProbeTest, getProbe
 import { publicKeyView } from './api-keys.mjs'
 import { publicEndpointView, fetchUpstreamModels, API_ENDPOINT_PRESETS } from './api-endpoints.mjs'
 import { publicUserView } from './panel-users.mjs'
+import { registerVendor, saveVendorSettings, vendorSettingsOf } from './vendor.mjs'
 import { authorizePanelRoute, mePayload, panelIdentity } from './panel-acl.mjs'
 import {
   denyIfUserCannotDeleteVm,
@@ -89,6 +90,7 @@ import {
   clampVmCreateQuota,
   countUserCreatedVms,
   normalizeOwnerId,
+  vmOriginOf,
 } from './resource-owner.mjs'
 import { logsToCsv, logsToJsonl } from './request-log.mjs'
 import {
@@ -688,6 +690,24 @@ export function createPanelHandler(ctx) {
     }
 
     // ========== Panel login (public) ==========
+    if (req.method === 'POST' && p === '/api/panel/register') {
+      const body = await readBody(req, 4096)
+      try {
+        const rec = registerVendor(panelUsers, {
+          username: body.username || body.user,
+          password: body.password || body.pass,
+          contact: body.contact,
+        })
+        return json(res, 201, panel.ok({ item: rec }))
+      } catch (e) {
+        const status =
+          e.code === 'username_exists' || e.code === 'registration_closed' || e.code === 'invalid_role' ? 409 : 400
+        return json(res, status, {
+          ok: false,
+          error: { message: String(e.message || e), code: e.code || 'register_failed' },
+        })
+      }
+    }
     if (req.method === 'POST' && p === '/api/panel/login') {
       const body = await readBody(req, 4096)
       const username = body.username || body.user || body.u || ''
@@ -806,6 +826,47 @@ export function createPanelHandler(ctx) {
       if (req.method === 'GET' && p === '/api/panel/users') {
         return json(res, 200, panel.ok({ items: panelUsers.list() }))
       }
+      if (req.method === 'GET' && p === '/api/panel/vendor-settings') {
+        return json(res, 200, panel.ok(vendorSettingsOf(panelUsers)))
+      }
+      if (req.method === 'PATCH' && p === '/api/panel/vendor-settings') {
+        const body = await readBody(req, 8192).catch(() => ({}))
+        return json(res, 200, panel.ok(saveVendorSettings(panelUsers, body || {})))
+      }
+      // GET /api/panel/vendor-usage?since=&until=&format=csv — vendor payout
+      // report (admin only; user role has no user-allowlisted path here).
+      if (req.method === 'GET' && p === '/api/panel/vendor-usage') {
+        const since = u.searchParams.get('since') || null
+        const until = u.searchParams.get('until') || null
+        const rows = requestLog.aggregateByOwner({ since, until }).map((r) => {
+          const rec = panelUsers.getById(r.owner_user_id)
+          const share = Number(rec?.vendor_share) || 0
+          return {
+            owner_user_id: r.owner_user_id,
+            username: rec?.username || r.owner_user_id,
+            enabled: rec?.enabled !== false,
+            vendor_share: share,
+            ...r,
+            vendor_payout: Math.round(r.total_cost * (share / 100) * 10000) / 10000,
+          }
+        })
+        if ((u.searchParams.get('format') || '').toLowerCase() === 'csv') {
+          const header = 'owner_user_id,username,requests,errors,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,total_cost,vendor_share,vendor_payout'
+          const lines = rows.map((r) =>
+            [r.owner_user_id, r.username, r.requests, r.errors, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens, r.total_cost, r.vendor_share, r.vendor_payout]
+              .map((v) => {
+                const s = String(v ?? '')
+                return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+              })
+              .join(','),
+          )
+          res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+          res.setHeader('Content-Disposition', 'attachment; filename="vendor-usage.csv"')
+          res.end([header, ...lines].join('\n') + '\n')
+          return true
+        }
+        return json(res, 200, panel.ok({ since, until, items: rows }))
+      }
       if (req.method === 'POST' && p === '/api/panel/users') {
         const body = await readBody(req, 8192).catch(() => ({}))
         try {
@@ -815,6 +876,8 @@ export function createPanelHandler(ctx) {
             role: body.role || 'user',
             enabled: body.enabled !== false,
             vm_create_quota: body.vm_create_quota,
+            vendor_share: body.vendor_share,
+            notes: body.notes || body.contact,
           })
           return json(res, 201, panel.ok({ item: publicUserView(rec) }))
         } catch (e) {
@@ -2732,6 +2795,20 @@ export function createPanelHandler(ctx) {
           }
           const existing = JSON.parse(fs.readFileSync(vmPath, 'utf8'))
           existing.id = existing.id || vmId
+          // Import is a body-id route, so the generic per-vm path guard in
+          // panel-tenant.mjs never sees it — enforce tenant ownership here.
+          const importIdent = panelIdentity(req)
+          if (importIdent.role === 'user') {
+            const owner = normalizeOwnerId(req.panelUserId)
+            const vmIsOwnedByUser =
+              !!owner && normalizeOwnerId(existing.owner_user_id) === owner && vmOriginOf(existing) === VM_ORIGIN.userCreated
+            if (!vmIsOwnedByUser) {
+              return json(res, 403, {
+                ok: false,
+                error: { code: 'forbidden', message: '只能向自己创建的虚拟机导入凭据' },
+              })
+            }
+          }
           if (isCodexVm(existing)) {
             const parsed = parseCodexImportPayload(body)
             if (!parsed.ok) {

@@ -152,7 +152,7 @@ export async function loginRequest(input: {
   username: string
   password: string
   base?: string
-}): Promise<{ token: string; user: string }> {
+}): Promise<{ token: string; user: string; views?: string[] }> {
   const base = input.base ?? apiBase()
   const url = `${base || ''}/api/panel/login`
   let res: Response
@@ -174,11 +174,13 @@ export async function loginRequest(input: {
   const json = (await res.json().catch(() => ({}))) as {
     token?: string
     user?: string
-    data?: { token?: string; user?: string }
+    views?: string[]
+    data?: { token?: string; user?: string; views?: string[] }
     error?: { message?: string }
     message?: string
   }
-  const token = json.token || json.data?.token || ''
+  const data = json.data ?? json
+  const token = json.token || data.token || ''
   if (!res.ok || !token) {
     throw new ApiError(
       json.error?.message ||
@@ -187,7 +189,11 @@ export async function loginRequest(input: {
       res.status
     )
   }
-  return { token, user: json.user || json.data?.user || input.username }
+  return {
+    token,
+    user: json.user || data.user || input.username,
+    views: Array.isArray(json.views) ? json.views : data.views,
+  }
 }
 
 export function logoutRequest() {
@@ -195,4 +201,39 @@ export function logoutRequest() {
   void panelFetch('/api/panel/logout', { method: 'POST' }).catch(
     () => undefined
   )
+}
+
+/** Public vendor self-registration — the only unauthenticated POST on the panel. */
+export async function registerVendorRequest(input: {
+  username: string
+  password: string
+  contact?: string
+  base?: string
+}): Promise<void> {
+  const base = input.base ?? apiBase()
+  const url = `${base || ''}/api/panel/register`
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: input.username,
+        password: input.password,
+        contact: input.contact ?? '',
+      }),
+    })
+  } catch {
+    throw new ApiError(`无法连接注册服务: ${url}`)
+  }
+  const json = (await res.json().catch(() => ({}))) as {
+    ok?: boolean
+    error?: { message?: string; code?: string }
+  }
+  if (!res.ok || json.ok === false) {
+    throw new ApiError(json.error?.message || `注册失败 HTTP ${res.status}`, res.status, {
+      code: json.error?.code,
+    })
+  }
 }

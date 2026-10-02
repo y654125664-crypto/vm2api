@@ -1,13 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { VIEW_TITLES } from '@/config/nav'
 import type { PanelRole } from '@/types/panel-auth'
-import type { PanelUser } from '@/types/panel-users'
-import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react'
+import type { PanelUser, VendorSettings } from '@/types/panel-users'
+import { BarChart3, KeyRound, Pencil, Percent, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
-import { api } from '@/lib/api'
-import { fmtAgo } from '@/lib/format'
+import { api, panelFetch } from '@/lib/api'
+import { fmtAgo, fmtNum, fmtUsd } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -41,7 +41,7 @@ import { PageHeader } from '@/components/page-header'
 import { TableSkeleton } from '@/components/page-skeletons'
 import { PasswordInput } from '@/components/password-input'
 import { QueryGate } from '@/components/query-gate'
-import { usersQueryOptions } from '@/features/users/queries'
+import { usersQueryOptions, vendorSettingsQueryOptions, vendorUsageQueryOptions } from '@/features/users/queries'
 
 // Mirrors assertPassword() in src/lib/admin/panel-users.mjs.
 const PASSWORD_MIN = 8
@@ -50,7 +50,7 @@ const PASSWORD_MAX = 128
 const ROLE_LABELS: Record<PanelRole, string> = {
   admin: '管理员',
   super: '运维',
-  user: '租户',
+  user: '租户 / 供应商',
 }
 
 function passwordError(pass: string, confirm: string): string {
@@ -67,6 +67,7 @@ export function UsersPage() {
   const q = useQuery(usersQueryOptions())
   const items = q.data?.items || []
   const [createOpen, setCreateOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
   const [edit, setEdit] = useState<PanelUser | null>(null)
   const [pwTarget, setPwTarget] = useState<PanelUser | null>(null)
   const [del, setDel] = useState<PanelUser | null>(null)
@@ -77,12 +78,19 @@ export function UsersPage() {
     <PageHeader
       title={VIEW_TITLES.users}
       extra={
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus />
-          新建用户
-        </Button>
+        <>
+          <Button variant='outline' onClick={() => setUsageOpen(true)}>
+            <BarChart3 />
+            分账报表
+          </Button>
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus />
+            新建用户
+          </Button>
+        </>
       }
     >
+      <VendorSettingsCard />
       <QueryGate
         loading={q.isLoading}
         error={q.error}
@@ -96,6 +104,7 @@ export function UsersPage() {
                 <TableHead>角色</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>自建配额</TableHead>
+                <TableHead>分成</TableHead>
                 <TableHead>最近登录</TableHead>
                 <TableHead className='text-end'>操作</TableHead>
               </TableRow>
@@ -104,7 +113,7 @@ export function UsersPage() {
               {items.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={7}
                     className='h-24 text-center text-muted-foreground'
                   >
                     暂无用户
@@ -115,7 +124,10 @@ export function UsersPage() {
                 const isSelf = u.username === me?.user
                 return (
                   <TableRow key={u.id}>
-                    <TableCell className='font-medium'>
+                    <TableCell
+                      className='font-medium'
+                      title={u.notes || undefined}
+                    >
                       {u.username}
                       {isSelf ? (
                         <span className='ms-2 text-xs text-muted-foreground'>
@@ -139,6 +151,9 @@ export function UsersPage() {
                     </TableCell>
                     <TableCell className='tabular-nums'>
                       {u.vm_create_quota ?? 0}
+                    </TableCell>
+                    <TableCell className='tabular-nums'>
+                      {u.vendor_share ? `${u.vendor_share}%` : '—'}
                     </TableCell>
                     <TableCell
                       className='text-muted-foreground'
@@ -221,6 +236,7 @@ export function UsersPage() {
             .catch((e: Error) => toast.error(e.message))
         }}
       />
+      <VendorUsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
     </PageHeader>
   )
 }
@@ -239,6 +255,8 @@ function CreateUserDialog({
   const [confirm, setConfirm] = useState('')
   const [role, setRole] = useState<PanelRole>('user')
   const [quota, setQuota] = useState(0)
+  const [share, setShare] = useState(0)
+  const [contact, setContact] = useState('')
   const [enabled, setEnabled] = useState(true)
   const pwErr = passwordError(password, confirm)
 
@@ -248,6 +266,8 @@ function CreateUserDialog({
     setConfirm('')
     setRole('user')
     setQuota(0)
+    setShare(0)
+    setContact('')
     setEnabled(true)
   }
 
@@ -261,6 +281,8 @@ function CreateUserDialog({
           role,
           enabled,
           vm_create_quota: quota,
+          vendor_share: share,
+          notes: contact,
         }),
       }),
     onSuccess: async () => {
@@ -317,6 +339,7 @@ function CreateUserDialog({
             quota={quota}
             setQuota={setQuota}
           />
+          <VendorFields share={share} setShare={setShare} contact={contact} setContact={setContact} />
           <DialogFooter>
             <Button
               type='submit'
@@ -381,12 +404,20 @@ function EditUserForm({
   const [role, setRole] = useState<PanelRole>(user.role)
   const [enabled, setEnabled] = useState(user.enabled !== false)
   const [quota, setQuota] = useState(user.vm_create_quota ?? 0)
+  const [share, setShare] = useState(user.vendor_share ?? 0)
+  const [contact, setContact] = useState(user.notes ?? '')
 
   const patch = useMutation({
     mutationFn: () =>
       api(`/api/panel/users/${encodeURIComponent(user.id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ role, enabled, vm_create_quota: quota }),
+        body: JSON.stringify({
+          role,
+          enabled,
+          vm_create_quota: quota,
+          vendor_share: share,
+          notes: contact,
+        }),
       }),
     onSuccess: async () => {
       toast.success('已更新')
@@ -416,6 +447,7 @@ function EditUserForm({
         setQuota={setQuota}
         lockSelf={isSelf}
       />
+      <VendorFields share={share} setShare={setShare} contact={contact} setContact={setContact} />
       <DialogFooter>
         <Button
           type='submit'
@@ -661,5 +693,261 @@ function RoleFields({
         </p>
       ) : null}
     </>
+  )
+}
+
+function VendorFields({
+  share,
+  setShare,
+  contact,
+  setContact,
+}: {
+  share: number
+  setShare: (n: number) => void
+  contact: string
+  setContact: (v: string) => void
+}) {
+  return (
+    <>
+      <Field id='user-share' label='供应商分成 % (0–100)'>
+        <Input
+          id='user-share'
+          type='number'
+          min={0}
+          max={100}
+          value={share}
+          onChange={(e) =>
+            setShare(Math.max(0, Math.min(100, Number(e.target.value) || 0)))
+          }
+        />
+      </Field>
+      <Field id='user-contact' label='联系方式（备注，选填）'>
+        <Input
+          id='user-contact'
+          value={contact}
+          maxLength={500}
+          onChange={(e) => setContact(e.target.value)}
+          placeholder='微信 / Telegram / 邮箱'
+        />
+      </Field>
+    </>
+  )
+}
+
+function VendorSettingsCard() {
+  const qc = useQueryClient()
+  const q = useQuery(vendorSettingsQueryOptions())
+  const data = q.data
+  const [enabled, setEnabled] = useState(false)
+  const [share, setShare] = useState(0)
+  const [touched, setTouched] = useState(false)
+
+  useEffect(() => {
+    if (data && !touched) {
+      setEnabled(!!data.enabled)
+      setShare(Math.min(100, Math.max(0, data.default_share ?? 0)))
+    }
+  }, [data, touched])
+
+  const save = useMutation({
+    mutationFn: () =>
+      api<VendorSettings>('/api/panel/vendor-settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled, default_share: share }),
+      }),
+    onSuccess: () => {
+      setTouched(false)
+      toast.success('供应商设置已保存')
+      void qc.invalidateQueries({ queryKey: ['panel', 'vendor-settings'] })
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
+  return (
+    <div className='rounded-md border p-4 space-y-3'>
+      <div className='flex items-center gap-2 text-sm font-medium'>
+        <Percent className='size-4' />
+        供应商注册
+      </div>
+      <p className='text-xs text-muted-foreground'>
+        开放后，登录页会出现「供应商注册」入口 ——
+        供应商可自助创建账号（租户角色，按默认分成记录），导入条目按归属强制隔离。
+      </p>
+      <div className='flex flex-wrap items-end gap-4'>
+        <div className='space-y-1.5'>
+          <Label htmlFor='vendor-enabled'>开放注册</Label>
+          <Switch
+            id='vendor-enabled'
+            checked={enabled}
+            onCheckedChange={(v) => {
+              setEnabled(v)
+              setTouched(true)
+            }}
+          />
+        </div>
+        <div className='space-y-1.5'>
+          <Label htmlFor='vendor-default-share'>默认分成 % (0–100)</Label>
+          <Input
+            id='vendor-default-share'
+            type='number'
+            min={0}
+            max={100}
+            className='w-40'
+            value={share}
+            onChange={(e) => {
+              setShare(Math.max(0, Math.min(100, Number(e.target.value) || 0)))
+              setTouched(true)
+            }}
+          />
+        </div>
+        <Button
+          size='sm'
+          onClick={() => save.mutate()}
+          disabled={!touched || save.isPending}
+          loading={save.isPending}
+        >
+          保存设置
+        </Button>
+        {q.error ? (
+          <p className='text-xs text-muted-foreground'>
+            设置加载失败：{(q.error as Error).message}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function VendorUsageDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [since, setSince] = useState('')
+  const [until, setUntil] = useState('')
+  const q = useQuery({
+    ...vendorUsageQueryOptions(since || undefined, until || undefined),
+    enabled: open,
+  })
+  const items = q.data?.items ?? []
+
+  async function downloadCsv() {
+    try {
+      const params = new URLSearchParams({ format: 'csv' })
+      if (since) params.set('since', since)
+      if (until) params.set('until', until)
+      const res = await panelFetch(`/api/panel/vendor-usage?${params}`)
+      if (!res.ok) throw new Error(`导出失败 HTTP ${res.status}`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'vendor-usage.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '导出失败')
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-w-3xl'>
+        <DialogHeader>
+          <DialogTitle>供应商分账报表</DialogTitle>
+          <DialogDescription>
+            按号池归属聚合用量，应付 = 总成本 × 该供应商分成比例。
+          </DialogDescription>
+        </DialogHeader>
+        <div className='flex flex-wrap items-end gap-3'>
+          <div className='space-y-1.5'>
+            <Label htmlFor='usage-since'>起始日</Label>
+            <Input
+              id='usage-since'
+              type='date'
+              className='w-40'
+              value={since}
+              onChange={(e) => setSince(e.target.value)}
+            />
+          </div>
+          <div className='space-y-1.5'>
+            <Label htmlFor='usage-until'>截止日</Label>
+            <Input
+              id='usage-until'
+              type='date'
+              className='w-40'
+              value={until}
+              onChange={(e) => setUntil(e.target.value)}
+            />
+          </div>
+          <Button size='sm' variant='outline' onClick={downloadCsv}>
+            导出 CSV
+          </Button>
+        </div>
+        {q.isLoading ? (
+          <p className='py-6 text-center text-sm text-muted-foreground'>
+            加载中…
+          </p>
+        ) : q.error ? (
+          <p className='py-6 text-center text-sm text-destructive'>
+            加载失败：{(q.error as Error).message}
+          </p>
+        ) : items.length === 0 ? (
+          <p className='py-6 text-center text-sm text-muted-foreground'>
+            暂无按归属记录的用量数据
+          </p>
+        ) : (
+          <div className='max-h-80 overflow-y-auto rounded-md border'>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>用户名</TableHead>
+                  <TableHead className='text-end'>请求数</TableHead>
+                  <TableHead className='text-end'>输入</TableHead>
+                  <TableHead className='text-end'>输出</TableHead>
+                  <TableHead className='text-end'>成本</TableHead>
+                  <TableHead className='text-end'>分成</TableHead>
+                  <TableHead className='text-end'>应付</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((r) => (
+                  <TableRow key={r.owner_user_id}>
+                    <TableCell className='font-medium'>
+                      {r.username}
+                      {r.enabled === false ? (
+                        <span className='ms-2 text-xs text-muted-foreground'>
+                          (已停用)
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className='text-end tabular-nums'>
+                      {fmtNum(r.requests)}
+                    </TableCell>
+                    <TableCell className='text-end tabular-nums'>
+                      {fmtNum(r.input_tokens)}
+                    </TableCell>
+                    <TableCell className='text-end tabular-nums'>
+                      {fmtNum(r.output_tokens)}
+                    </TableCell>
+                    <TableCell className='text-end tabular-nums'>
+                      {fmtUsd(r.total_cost)}
+                    </TableCell>
+                    <TableCell className='text-end tabular-nums'>
+                      {r.vendor_share}%
+                    </TableCell>
+                    <TableCell className='text-end tabular-nums'>
+                      {fmtUsd(r.vendor_payout)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }

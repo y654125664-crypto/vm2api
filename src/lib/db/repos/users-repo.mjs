@@ -16,6 +16,7 @@ const COLUMNS = [
   'balance',
   'concurrency',
   'vm_create_quota',
+  'vendor_share',
   'status',
   'notes',
   'last_login_at',
@@ -36,6 +37,7 @@ function rowToRec(row) {
     balance: Number(row.balance) || 0,
     concurrency: Number(row.concurrency) || 0,
     vm_create_quota: Number(row.vm_create_quota) || 0,
+    vendor_share: Number(row.vendor_share) || 0,
     status: row.status,
     enabled: row.status === 'active',
     notes: row.notes ?? '',
@@ -91,6 +93,7 @@ export class UsersRepo {
         if (c === 'balance') return rec.balance ?? 0
         if (c === 'concurrency') return rec.concurrency ?? 5
         if (c === 'vm_create_quota') return rec.vm_create_quota ?? 0
+        if (c === 'vendor_share') return rec.vendor_share ?? 0
         if (c === 'notes') return rec.notes ?? ''
         if (c === 'deleted_at') return null
         return rec[c] ?? null
@@ -109,6 +112,7 @@ export class UsersRepo {
         if (c === 'balance') return rec.balance ?? 0
         if (c === 'concurrency') return rec.concurrency ?? 5
         if (c === 'vm_create_quota') return rec.vm_create_quota ?? 0
+        if (c === 'vendor_share') return rec.vendor_share ?? 0
         if (c === 'notes') return rec.notes ?? ''
         return rec[c] ?? null
       }),

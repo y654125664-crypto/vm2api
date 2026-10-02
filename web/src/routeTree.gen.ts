@@ -21,6 +21,7 @@ import { Route as AuthenticatedKeysRouteImport } from './routes/_authenticated/k
 import { Route as AuthenticatedLogsRouteImport } from './routes/_authenticated/logs'
 import { Route as AuthenticatedModelsRouteImport } from './routes/_authenticated/models'
 import { Route as AuthenticatedOverviewRouteImport } from './routes/_authenticated/overview'
+import { Route as AuthenticatedPoolRouteImport } from './routes/_authenticated/pool'
 import { Route as AuthenticatedProtocolRouteImport } from './routes/_authenticated/protocol'
 import { Route as AuthenticatedProxiesRouteImport } from './routes/_authenticated/proxies'
 import { Route as AuthenticatedSystemRouteImport } from './routes/_authenticated/system'
@@ -91,6 +92,11 @@ const AuthenticatedModelsRoute = AuthenticatedModelsRouteImport.update({
 const AuthenticatedOverviewRoute = AuthenticatedOverviewRouteImport.update({
   id: '/overview',
   path: '/overview',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedPoolRoute = AuthenticatedPoolRouteImport.update({
+  id: '/pool',
+  path: '/pool',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedProtocolRoute = AuthenticatedProtocolRouteImport.update({
@@ -170,6 +176,7 @@ export interface FileRoutesByFullPath {
   '/logs': typeof AuthenticatedLogsRoute
   '/models': typeof AuthenticatedModelsRoute
   '/overview': typeof AuthenticatedOverviewRoute
+  '/pool': typeof AuthenticatedPoolRoute
   '/protocol': typeof AuthenticatedProtocolRoute
   '/proxies': typeof AuthenticatedProxiesRoute
   '/system': typeof AuthenticatedSystemRoute
@@ -194,6 +201,7 @@ export interface FileRoutesByTo {
   '/logs': typeof AuthenticatedLogsRoute
   '/models': typeof AuthenticatedModelsRoute
   '/overview': typeof AuthenticatedOverviewRoute
+  '/pool': typeof AuthenticatedPoolRoute
   '/protocol': typeof AuthenticatedProtocolRoute
   '/proxies': typeof AuthenticatedProxiesRoute
   '/system': typeof AuthenticatedSystemRoute
@@ -221,6 +229,7 @@ export interface FileRoutesById {
   '/_authenticated/logs': typeof AuthenticatedLogsRoute
   '/_authenticated/models': typeof AuthenticatedModelsRoute
   '/_authenticated/overview': typeof AuthenticatedOverviewRoute
+  '/_authenticated/pool': typeof AuthenticatedPoolRoute
   '/_authenticated/protocol': typeof AuthenticatedProtocolRoute
   '/_authenticated/proxies': typeof AuthenticatedProxiesRoute
   '/_authenticated/system': typeof AuthenticatedSystemRoute
@@ -249,6 +258,7 @@ export interface FileRouteTypes {
     | '/logs'
     | '/models'
     | '/overview'
+    | '/pool'
     | '/protocol'
     | '/proxies'
     | '/system'
@@ -273,6 +283,7 @@ export interface FileRouteTypes {
     | '/logs'
     | '/models'
     | '/overview'
+    | '/pool'
     | '/protocol'
     | '/proxies'
     | '/system'
@@ -299,6 +310,7 @@ export interface FileRouteTypes {
     | '/_authenticated/logs'
     | '/_authenticated/models'
     | '/_authenticated/overview'
+    | '/_authenticated/pool'
     | '/_authenticated/protocol'
     | '/_authenticated/proxies'
     | '/_authenticated/system'
@@ -405,6 +417,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOverviewRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/pool': {
+      id: '/_authenticated/pool'
+      path: '/pool'
+      fullPath: '/pool'
+      preLoaderRoute: typeof AuthenticatedPoolRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/protocol': {
       id: '/_authenticated/protocol'
       path: '/protocol'
@@ -502,6 +521,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedLogsRoute: typeof AuthenticatedLogsRoute
   AuthenticatedModelsRoute: typeof AuthenticatedModelsRoute
   AuthenticatedOverviewRoute: typeof AuthenticatedOverviewRoute
+  AuthenticatedPoolRoute: typeof AuthenticatedPoolRoute
   AuthenticatedProtocolRoute: typeof AuthenticatedProtocolRoute
   AuthenticatedProxiesRoute: typeof AuthenticatedProxiesRoute
   AuthenticatedSystemRoute: typeof AuthenticatedSystemRoute
@@ -527,6 +547,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedLogsRoute: AuthenticatedLogsRoute,
   AuthenticatedModelsRoute: AuthenticatedModelsRoute,
   AuthenticatedOverviewRoute: AuthenticatedOverviewRoute,
+  AuthenticatedPoolRoute: AuthenticatedPoolRoute,
   AuthenticatedProtocolRoute: AuthenticatedProtocolRoute,
   AuthenticatedProxiesRoute: AuthenticatedProxiesRoute,
   AuthenticatedSystemRoute: AuthenticatedSystemRoute,
