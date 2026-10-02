@@ -186,6 +186,8 @@ function userProxyPathAllowed(method, path) {
   if (/^\/api\/panel\/proxies\/[^/]+$/.test(path))
     return method === 'GET' || method === 'PATCH' || method === 'PUT' || method === 'DELETE'
   if (/^\/api\/panel\/proxies\/[^/]+\/reveal$/.test(path) && method === 'POST') return true
+  // 绑定/解绑自己的出口 IP —— 路由层有 VM+代理双归属校验（panel-routes）。
+  if (/^\/api\/panel\/proxies\/[^/]+\/(bind|unbind)$/.test(path)) return method === 'POST'
   return false
 }
 

@@ -4,9 +4,9 @@ import { VIEW_TITLES } from '@/config/nav'
 import { api } from '@/lib/api'
 import { fmtAgo } from '@/lib/format'
 import { importErrorMessage } from '@/lib/import-errors'
-import type { Vm } from '@/types/panel-vm'
+import type { Vm, VmProxySnap } from '@/types/panel-vm'
 import { toast } from 'sonner'
-import { HardDriveUpload, Plus } from 'lucide-react'
+import { Cable, HardDriveUpload, Plus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,9 +31,11 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { vmsListQueryOptions } from '@/features/vm/queries'
+import { proxiesQueryOptions, useRefreshProxies } from '@/features/proxies/queries'
 
 // 号池页把底层「虚拟机=号位」完全藏掉：供应商只看到「我的号」。
-// 上号 = 自动 POST /vms/create（盖 owner 戳、吃自建配额）再 POST /vms/import 凭据。
+// 上号 = 自动 POST /vms/create（盖 owner 戳、吃自建配额、从自己的代理池自动分配出口）
+// 再 POST /vms/import 凭据。出口 IP 绑定对齐管理端导入流。
 
 // 与 vm/credential-panel.tsx 保持一致：sk-ant-sid 前缀走 cookie 换票分支。
 const SESSION_KEY_PREFIX = /^sk-ant-sid/i
@@ -45,6 +47,13 @@ const CRED_KIND_LABELS = {
 } as const
 
 type CredKind = keyof typeof CRED_KIND_LABELS
+
+function splitLines(text: string): string[] {
+  return text
+    .split(/[\s,]+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
 
 export function PoolPage() {
   const qc = useQueryClient()
@@ -94,6 +103,9 @@ export function PoolPage() {
           ))}
         </div>
 
+        <PoolProxyCard />
+        <div className='mb-4' />
+
         <div className='overflow-x-auto rounded-md border'>
           <Table>
             <TableHeader>
@@ -101,6 +113,7 @@ export function PoolPage() {
                 <TableHead>号</TableHead>
                 <TableHead>账号</TableHead>
                 <TableHead>凭据类型</TableHead>
+                <TableHead>出口 IP</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>上次探测</TableHead>
               </TableRow>
@@ -108,7 +121,7 @@ export function PoolPage() {
             <TableBody>
               {items.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className='h-28 text-center'>
+                  <TableCell colSpan={6} className='h-28 text-center'>
                     <div className='text-muted-foreground'>
                       号池还是空的 —— 点右上角「上号」把第一个号导入
                     </div>
@@ -121,8 +134,9 @@ export function PoolPage() {
                   <TableCell className='text-muted-foreground'>
                     {v.email || '—'}
                   </TableCell>
-                  <TableCell>
-                    {CRED_LABEL(v)}
+                  <TableCell>{CRED_LABEL(v)}</TableCell>
+                  <TableCell className='text-muted-foreground'>
+                    {PROXY_LABEL(v)}
                   </TableCell>
                   <TableCell>
                     <PoolStatusBadge vm={v} />
@@ -144,10 +158,6 @@ export function PoolPage() {
               queryKey: vmsListQueryOptions().queryKey,
             })
           }}
-          onSuccess={() => {
-            toast.success('号已入池')
-            setCreateOpen(false)
-          }}
         />
       </QueryGate>
     </PageHeader>
@@ -163,6 +173,18 @@ function CRED_LABEL(vm: Vm): string {
   return '—'
 }
 
+function PROXY_LABEL(vm: Vm): string {
+  const proxy = vm.proxy
+  if (proxy?.kind === 'local') return '本地出口'
+  if (proxy?.host) {
+    const host = proxy.host
+    const port = proxy.port != null ? `:${proxy.port}` : ''
+    return `${host}${port}`
+  }
+  if (vm.proxy_configured) return '本地出口'
+  return '—'
+}
+
 function PoolStatusBadge({ vm }: { vm: Vm }) {
   if (vm.schedule_state === 'off') return <Badge variant='outline'>停用</Badge>
   if (vm.schedule_state === 'restricted' || !vm.availability?.usable)
@@ -170,71 +192,195 @@ function PoolStatusBadge({ vm }: { vm: Vm }) {
   return <Badge variant='secondary'>正常</Badge>
 }
 
+/** 出口 IP 卡片：供应商自己导入的 SOCKS5 池（服务端按 owner 过滤）。 */
+function PoolProxyCard() {
+  const q = useQuery(proxiesQueryOptions())
+  const refresh = useRefreshProxies()
+  const [text, setText] = useState('')
+  const [pending, setPending] = useState(false)
+  const proxies = (q.data?.proxies ?? []).filter((p) => p.kind !== 'local')
+
+  async function importProxies() {
+    if (!text.trim()) return
+    setPending(true)
+    try {
+      await api('/api/panel/proxies/import', {
+        method: 'POST',
+        body: JSON.stringify({ text: text.trim() }),
+      })
+      toast.success('出口 IP 已入池，上号时自动分配')
+      setText('')
+      await refresh()
+    } catch (e) {
+      toast.error(importErrorMessage(e as Error))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className='mb-4 rounded-md border p-4 space-y-3'>
+      <div className='flex items-center gap-2 text-sm font-medium'>
+        <Cable className='size-4' />
+        出口 IP（SOCKS5）
+        <span className='text-xs text-muted-foreground'>
+          共 {proxies.length} 个 · 上号时按号自动 1:1 分配
+        </span>
+      </div>
+      <div className='flex flex-wrap gap-2'>
+        {proxies.length === 0 ? (
+          <p className='text-xs text-muted-foreground'>
+            还没有出口 IP —— 粘贴下方的行导入；没有 IP 时号会走平台本地出口。
+          </p>
+        ) : (
+          proxies.map((p) => (
+            <ProxyChip key={p.id} proxy={p} />
+          ))
+        )}
+      </div>
+      <textarea
+        className='w-full rounded-md border bg-transparent p-2 text-sm'
+        rows={2}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={'host:port:user:pass 或 socks5://user:pass@host:1080\n支持多行，一次导入多个 IP'}
+      />
+      <Button
+        size='sm'
+        variant='outline'
+        onClick={importProxies}
+        disabled={!text.trim() || pending}
+        loading={pending}
+      >
+        导入出口 IP
+      </Button>
+    </div>
+  )
+}
+
+function ProxyChip({ proxy }: { proxy: VmProxySnap }) {
+  const host = proxy.host ?? ''
+  const port = proxy.port != null ? `:${proxy.port}` : ''
+  const ok = proxy.status === 'ok' || proxy.latency_ms != null
+  return (
+    <span className='inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs'>
+      <span
+        className={`inline-block size-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-amber-500'}`}
+      />
+      {host}
+      {port}
+      {proxy.bound_count ? (
+        <span className='text-muted-foreground'>·{proxy.bound_count}</span>
+      ) : null}
+    </span>
+  )
+}
+
+type PoolImportResult = { label: string; ok: boolean; message: string }
+
 function PoolImportDialog({
   open,
   onOpenChange,
   onDone,
-  onSuccess,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   onDone: () => Promise<unknown>
-  onSuccess?: (vmId: string) => unknown
 }) {
   const [kind, setKind] = useState<CredKind>('oauth')
-  const [name, setName] = useState('')
-  const [value, setValue] = useState('')
+  const [prefix, setPrefix] = useState('')
+  const [creds, setCreds] = useState('')
+  const [proxyMode, setProxyMode] = useState<'auto' | 'manual'>('auto')
+  const [proxyLines, setProxyLines] = useState('')
+  const [results, setResults] = useState<PoolImportResult[]>([])
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
 
   const reset = () => {
-    setName('')
-    setValue('')
+    setPrefix('')
+    setCreds('')
+    setProxyLines('')
     setError('')
   }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError('')
-    if (!value.trim()) {
-      setError('请填写凭据内容')
+    const lines = splitLines(creds)
+    if (lines.length === 0) {
+      setError('请填写凭据内容（支持多行批量）')
+      return
+    }
+    const proxies = proxyMode === 'manual' ? splitLines(proxyLines) : []
+    if (proxyMode === 'manual' && proxies.length === 0) {
+      setError('手动模式需要粘贴出口 IP，每行一个')
       return
     }
     setPending(true)
+    setResults([])
+    const outcomes: PoolImportResult[] = []
     try {
-      // 1) 建号位：走既有种子 VM 流程，服务端自动盖 owner 与自建配额。
-      const created = await api<{ item?: Vm; id?: string }>(
-        '/api/panel/vms/create',
-        {
-          method: 'POST',
-          body: JSON.stringify(name.trim() ? { name: name.trim() } : {}),
-        },
-      )
-      const vmId = created?.item?.id ?? created?.id
-      if (!vmId) throw new Error('创建号位失败：未返回 vm id')
-      // 2) 导入凭据（字段映射对齐 vm/credential-panel.tsx）。
-      const body: Record<string, unknown> = { vm_id: vmId }
-      if (kind === 'apikey') {
-        body.type = 'apikey'
-        body.api_key = value.trim()
-      } else {
-        if (kind === 'setup-token') {
-          body.type = 'setup-token'
-          body.scope = 'inference'
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        const label = prefix.trim()
+          ? `${prefix.trim().replace(/[-_]+$/, '')}-${String(i + 1).padStart(2, '0')}`
+          : ''
+        try {
+          // 1) 建号位：服务端盖 owner 戳 + 吃自建配额 + 自动从我的代理池分配出口。
+          const created = await api<{ item?: Vm; id?: string }>(
+            '/api/panel/vms/create',
+            {
+              method: 'POST',
+              body: JSON.stringify(
+                label ? { name: label, auto_allocate_proxy: proxyMode === 'auto' } : { auto_allocate_proxy: proxyMode === 'auto' },
+              ),
+            },
+          )
+          const vmId = created?.item?.id ?? created?.id
+          if (!vmId) throw new Error('创建号位失败：未返回 vm id')
+          // 2) 导入凭据（字段映射对齐 vm/credential-panel.tsx）。
+          const body: Record<string, unknown> = { vm_id: vmId }
+          if (kind === 'apikey') {
+            body.type = 'apikey'
+            body.api_key = line
+          } else {
+            if (kind === 'setup-token') {
+              body.type = 'setup-token'
+              body.scope = 'inference'
+            }
+            if (SESSION_KEY_PREFIX.test(line)) body.session_key = line
+            else body.access_token = line
+          }
+          await api('/api/panel/vms/import', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          })
+          // 3) 手动模式：按行 1:1 绑定粘贴的出口 IP。
+          if (proxyMode === 'manual' && proxies[i]) {
+            await api('/api/panel/proxies/import', {
+              method: 'POST',
+              body: JSON.stringify({ text: proxies[i], bind_vm_id: vmId }),
+            })
+          }
+          outcomes.push({ label: label || vmId, ok: true, message: '已入池' })
+        } catch (e) {
+          outcomes.push({
+            label: label || `第 ${i + 1} 行`,
+            ok: false,
+            message: importErrorMessage(e as Error),
+          })
         }
-        const v = value.trim()
-        if (SESSION_KEY_PREFIX.test(v)) body.session_key = v
-        else body.access_token = v
+        setResults([...outcomes])
       }
-      await api('/api/panel/vms/import', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      })
-      reset()
-      onSuccess?.(vmId)
+      const failed = outcomes.filter((r) => !r.ok).length
+      if (failed === 0) {
+        toast.success(`${outcomes.length} 个号已入池`)
+        reset()
+        onOpenChange(false)
+      } else {
+        toast.warning(`成功 ${outcomes.length - failed} / 失败 ${failed}`)
+      }
       await onDone()
-    } catch (e) {
-      setError(importErrorMessage(e as Error))
     } finally {
       setPending(false)
     }
@@ -244,16 +390,19 @@ function PoolImportDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) reset()
+        if (!next && !pending) {
+          reset()
+          setResults([])
+        }
         onOpenChange(next)
       }}
     >
-      <DialogContent>
+      <DialogContent className='max-w-lg'>
         <form className='space-y-4' onSubmit={onSubmit}>
           <DialogHeader>
             <DialogTitle>上号</DialogTitle>
             <DialogDescription>
-              凭据只提交一次、不回显。入池后由平台自动调度出流，占你名下的自建配额。
+              支持多行批量，一行一个号；凭据只提交一次、不回显。上号建议绑定自己的出口 IP。
             </DialogDescription>
           </DialogHeader>
           <div className='space-y-1.5'>
@@ -276,42 +425,98 @@ function PoolImportDialog({
             </div>
           </div>
           <div className='space-y-1.5'>
-            <Label htmlFor='pool-name'>号标签（选填）</Label>
-            <Input
-              id='pool-name'
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder='留空自动编号'
-              autoComplete='off'
-            />
-          </div>
-          <div className='space-y-1.5'>
-            <Label htmlFor='pool-cred'>
-              {kind === 'apikey' ? 'API Key（sk-ant-api...）' : '凭据内容'}
+            <Label htmlFor='pool-creds'>
+              {kind === 'apikey' ? 'API Key（每行一个）' : '凭据内容（每行一个号）'}
             </Label>
-            <Input
-              id='pool-cred'
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
+            <textarea
+              id='pool-creds'
+              className='w-full rounded-md border bg-transparent p-2 text-sm font-mono'
+              rows={4}
+              value={creds}
+              onChange={(e) => setCreds(e.target.value)}
               autoComplete='off'
               spellCheck={false}
               placeholder={
                 kind === 'apikey'
-                  ? 'sk-ant-api03-...'
-                  : 'sk-ant-sid / 访问令牌 / setup token'
+                  ? 'sk-ant-api03-...\nsk-ant-api03-...'
+                  : 'sk-ant-sid01-... 或 access token\n支持逗号 / 空格 / 换行分隔，自动去重'
               }
             />
           </div>
+          <div className='space-y-1.5'>
+            <Label htmlFor='pool-prefix'>号名前缀（选填）</Label>
+            <Input
+              id='pool-prefix'
+              value={prefix}
+              onChange={(e) => setPrefix(e.target.value)}
+              placeholder='如 shop-a，生成 shop-a-01 / shop-a-02'
+              autoComplete='off'
+            />
+          </div>
+          <div className='space-y-1.5'>
+            <Label>出口 IP</Label>
+            <div className='flex gap-2'>
+              <button
+                type='button'
+                onClick={() => setProxyMode('auto')}
+                className={`rounded-md border px-3 py-1.5 text-sm ${
+                  proxyMode === 'auto'
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'text-muted-foreground'
+                }`}
+              >
+                自动匹配我的代理池
+              </button>
+              <button
+                type='button'
+                onClick={() => setProxyMode('manual')}
+                className={`rounded-md border px-3 py-1.5 text-sm ${
+                  proxyMode === 'manual'
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'text-muted-foreground'
+                }`}
+              >
+                手动粘贴（与号 1:1）
+              </button>
+            </div>
+            {proxyMode === 'manual' ? (
+              <textarea
+                className='w-full rounded-md border bg-transparent p-2 text-sm font-mono'
+                rows={3}
+                value={proxyLines}
+                onChange={(e) => setProxyLines(e.target.value)}
+                autoComplete='off'
+                spellCheck={false}
+                placeholder={'host:port:user:pass 或 socks5://user:pass@host:1080\n行序与上面的号一一对应'}
+              />
+            ) : (
+              <p className='text-xs text-muted-foreground'>
+                自动模式：从你导入的出口 IP 里按可用度挑一个绑到号上；没导入 IP 时走平台本地出口。
+              </p>
+            )}
+          </div>
           {error ? <p className='text-sm text-destructive'>{error}</p> : null}
+          {results.length > 0 ? (
+            <div className='max-h-32 space-y-1 overflow-y-auto rounded-md border p-2'>
+              {results.map((r) => (
+                <div key={r.label} className='flex items-center justify-between text-xs'>
+                  <span className='font-medium'>{r.label}</span>
+                  <span className={r.ok ? 'text-emerald-600' : 'text-destructive'}>
+                    {r.message}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <DialogFooter>
             <Button
               type='submit'
               className='w-full'
-              disabled={!value.trim() || pending}
+              disabled={!creds.trim() || pending}
               loading={pending}
             >
               <HardDriveUpload />
-              {pending ? '入池中…' : '导入号池'}
+              {pending ? '入池中…' : `导入号池${splitLines(creds).length > 1 ? `（${splitLines(creds).length} 个号）` : ''}`}
             </Button>
           </DialogFooter>
         </form>

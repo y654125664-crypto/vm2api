@@ -3974,6 +3974,25 @@ export function createPanelHandler(ctx) {
             ok: false,
             error: { type: 'invalid_request_error', code: 'missing_field', message: 'vm_id required', param: 'vm_id' },
           })
+        // 供应商只能给自己的号位绑自己导入的出口代理。
+        const bindIdent = panelIdentity(req)
+        if (bindIdent.role === 'user') {
+          const owner = normalizeOwnerId(req.panelUserId)
+          const bindVm = getVm(cfg.paths.project, vmId)
+          if (!bindVm || normalizeOwnerId(bindVm.owner_user_id) !== owner || vmOriginOf(bindVm) !== VM_ORIGIN.userCreated) {
+            return json(res, 403, {
+              ok: false,
+              error: { type: 'permission_error', code: 'forbidden', message: '只能给自己的号位绑定出口代理' },
+            })
+          }
+          const proxyRec = proxyPool.snapshot().proxies.find((proxy) => proxy.id === id)
+          if (proxyRec?.owner_user_id && normalizeOwnerId(proxyRec.owner_user_id) !== owner) {
+            return json(res, 403, {
+              ok: false,
+              error: { type: 'permission_error', code: 'forbidden', message: '不能绑定其他供应商导入的出口代理' },
+            })
+          }
+        }
         const result = proxyPool.bind(id, vmId)
         if (!result.ok) {
           const message =
@@ -4005,6 +4024,35 @@ export function createPanelHandler(ctx) {
         const body = await readBody(req, 64 * 1024)
         const vmId = String(body.vm_id || '').trim()
         const snap = proxyPool.snapshot().proxies.find((proxy) => proxy.id === id)
+        // 供应商只能解绑自己号位上的出口代理。
+        const unbindIdent = panelIdentity(req)
+        if (unbindIdent.role === 'user') {
+          const owner = normalizeOwnerId(req.panelUserId)
+          if (snap?.owner_user_id && normalizeOwnerId(snap.owner_user_id) !== owner) {
+            return json(res, 403, {
+              ok: false,
+              error: { type: 'permission_error', code: 'forbidden', message: '不能解绑其他供应商导入的出口代理' },
+            })
+          }
+          const owned = new Set(
+            listVms(cfg.paths.project)
+              .filter((item) => normalizeOwnerId(item.owner_user_id) === owner && vmOriginOf(item) === VM_ORIGIN.userCreated)
+              .map((item) => item.id),
+          )
+          const targets0 = vmId
+            ? [vmId]
+            : snap?.bound_vm_ids?.length
+              ? snap.bound_vm_ids
+              : snap?.bound_vm_id
+                ? [snap.bound_vm_id]
+                : []
+          if (targets0.some((target) => !owned.has(target))) {
+            return json(res, 403, {
+              ok: false,
+              error: { type: 'permission_error', code: 'forbidden', message: '只能解绑自己号位上的出口代理' },
+            })
+          }
+        }
         const targets = vmId
           ? [vmId]
           : snap?.bound_vm_ids?.length
