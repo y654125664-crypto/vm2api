@@ -32,6 +32,9 @@ export type VendorUsageRow = {
   output_tokens: number
   cache_read_tokens: number
   cache_creation_tokens: number
+  /** 计费口径成本（actual_cost 优先，与号商自己的 billing 页同源同值） */
+  cost_usd: number
+  /** 官方价成本 */
   total_cost: number
   vendor_payout: number
 }

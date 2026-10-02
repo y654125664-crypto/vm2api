@@ -932,8 +932,8 @@ function VendorUsageDialog({
                     <TableCell className='text-end tabular-nums'>
                       {fmtNum(r.output_tokens)}
                     </TableCell>
-                    <TableCell className='text-end tabular-nums'>
-                      {fmtUsd(r.total_cost)}
+                    <TableCell className='text-end tabular-nums' title='计费口径（与号商自己看到的钱同源）'>
+                      {fmtUsd(r.cost_usd)}
                     </TableCell>
                     <TableCell className='text-end tabular-nums'>
                       {r.vendor_share}%

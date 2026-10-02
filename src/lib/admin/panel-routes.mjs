@@ -867,13 +867,14 @@ export function createPanelHandler(ctx) {
             enabled: rec?.enabled !== false,
             vendor_share: share,
             ...r,
-            vendor_payout: Math.round(r.total_cost * (share / 100) * 10000) / 10000,
+            // 应付 = 计费口径成本（与号商自己的 billing 页同源同值）× 分成
+            vendor_payout: Math.round(r.cost_usd * (share / 100) * 10000) / 10000,
           }
         })
         if ((u.searchParams.get('format') || '').toLowerCase() === 'csv') {
-          const header = 'owner_user_id,username,requests,errors,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,total_cost,vendor_share,vendor_payout'
+          const header = 'owner_user_id,username,requests,errors,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,cost_usd,total_cost,vendor_share,vendor_payout'
           const lines = rows.map((r) =>
-            [r.owner_user_id, r.username, r.requests, r.errors, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens, r.total_cost, r.vendor_share, r.vendor_payout]
+            [r.owner_user_id, r.username, r.requests, r.errors, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens, r.cost_usd, r.total_cost, r.vendor_share, r.vendor_payout]
               .map((v) => {
                 const s = String(v ?? '')
                 return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s

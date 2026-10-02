@@ -458,13 +458,16 @@ export class UsageLogsRepo {
              COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
              COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
              COALESCE(SUM(u.cache_creation_tokens), 0) AS cache_creation_tokens,
-             COALESCE(SUM(u.total_cost), 0) AS total_cost
+             -- 计费口径：actual_cost（total_cost × 倍率）优先，与号商自己的
+             -- ownerBilling 页面同源同值 —— 分账基数必须等于号商看到的钱。
+             COALESCE(SUM(COALESCE(u.actual_cost, u.total_cost, 0)), 0) AS cost_usd,
+             COALESCE(SUM(COALESCE(u.total_cost, 0)), 0) AS total_cost
       FROM usage_logs u
       LEFT JOIN api_keys ak ON ak.id = u.api_key_id
       LEFT JOIN vms v ON v.id = u.vm_id
       ${where ? `WHERE ${where}` : ''}
       GROUP BY owner HAVING owner IS NOT NULL
-      ORDER BY total_cost DESC
+      ORDER BY cost_usd DESC
     `)
       .all(...params)
     return rows.map((r) => ({
@@ -475,6 +478,7 @@ export class UsageLogsRepo {
       output_tokens: Number(r.output_tokens) || 0,
       cache_read_tokens: Number(r.cache_read_tokens) || 0,
       cache_creation_tokens: Number(r.cache_creation_tokens) || 0,
+      cost_usd: Number(r.cost_usd) || 0,
       total_cost: Number(r.total_cost) || 0,
     }))
   }
