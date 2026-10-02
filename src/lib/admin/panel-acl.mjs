@@ -3,13 +3,14 @@
  *
  *   admin  — full console + user management
  *   super  — overview / cluster / usage / logs + VM page (schedule only)
- *   user   — tenant: vm / proxies / keys / billing / logs (owner-scoped)
+ *   user   — 供应商/号商: pool (我的号池) / import (上号) / billing / logs (owner-scoped)
  */
 
 export const PANEL_VIEWS = [
   'overview',
   'cluster',
   'vm',
+  'pool',
   'import',
   'usage',
   'proxies',
@@ -28,7 +29,9 @@ export const PANEL_VIEWS = [
 ]
 
 const ROLE_VIEWS = {
-  user: ['vm', 'proxies', 'keys', 'billing', 'logs'],
+  // 供应商/号商视角：只看自己的号池与上号，不接触虚拟机运维概念。
+  // 底层仍走 vms/create + vms/import（pool 页自动编排并盖 owner 戳）。
+  user: ['pool', 'import', 'billing', 'logs'],
   super: ['overview', 'cluster', 'usage', 'logs', 'vm'],
   admin: PANEL_VIEWS.slice(),
 }

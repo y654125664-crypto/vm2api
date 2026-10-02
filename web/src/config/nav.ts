@@ -21,6 +21,7 @@ export type ViewId =
   | 'overview'
   | 'cluster'
   | 'vm'
+  | 'pool'
   | 'import'
   | 'usage'
   | 'billing'
@@ -41,6 +42,7 @@ export const VIEW_TITLES: Record<ViewId, string> = {
   overview: '总览',
   cluster: '集群',
   vm: '虚拟机',
+  pool: '我的号池',
   import: '导入',
   usage: '用量',
   billing: '计费',

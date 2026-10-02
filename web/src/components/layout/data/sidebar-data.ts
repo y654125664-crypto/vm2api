@@ -9,6 +9,7 @@ import {
   Layers,
   LayoutDashboard,
   MessageSquareText,
+  Network,
   ScrollText,
   Server,
   Settings,
@@ -21,11 +22,13 @@ const ALL_GROUPS: NavGroup[] = [
   {
     title: '集群',
     items: [
+      { title: '我的号池', url: '/pool', icon: Boxes },
       { title: '总览', url: '/overview', icon: LayoutDashboard },
-      { title: '集群', url: '/cluster', icon: Boxes },
+      { title: '集群', url: '/cluster', icon: Network },
       { title: '虚拟机', url: '/vm', icon: Server },
       { title: '导入', url: '/import', icon: Download },
       { title: '用量', url: '/usage', icon: Gauge },
+      { title: '计费', url: '/billing', icon: Activity },
     ],
   },
   {
