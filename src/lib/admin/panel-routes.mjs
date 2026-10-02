@@ -856,6 +856,7 @@ export function createPanelHandler(ctx) {
       // GET /api/panel/vendor-usage?since=&until=&format=csv — vendor payout
       // report (admin only; user role has no user-allowlisted path here).
       if (req.method === 'GET' && p === '/api/panel/vendor-usage') {
+        const u = new URL(req.url, 'http://x')
         const since = u.searchParams.get('since') || null
         const until = u.searchParams.get('until') || null
         const rows = requestLog.aggregateByOwner({ since, until }).map((r) => {
