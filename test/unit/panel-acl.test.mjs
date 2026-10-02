@@ -14,10 +14,11 @@ const serverSrc = [
   fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/server.mjs'), 'utf8'),
 ].join('\n')
 
-test('user sees pool / import / billing / logs（供应商号池视角，不再暴露 VM 运维）', () => {
-  assert.deepEqual(viewsForRole('user'), ['pool', 'import', 'billing', 'logs'])
+test('user sees pool / billing / logs（供应商号池视角，不再暴露 VM 运维与旧导入页）', () => {
+  assert.deepEqual(viewsForRole('user'), ['pool', 'billing', 'logs'])
   assert.equal(canViewPage('user', 'pool'), true)
   assert.equal(canViewPage('user', 'vm'), false)
+  assert.equal(canViewPage('user', 'import'), false)
   assert.equal(canViewPage('user', 'keys'), false)
   assert.equal(canViewPage('user', 'proxies'), false)
   assert.equal(canViewPage('user', 'overview'), false)

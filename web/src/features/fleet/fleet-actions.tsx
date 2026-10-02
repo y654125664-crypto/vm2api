@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 import { wrapSyncKernelFails } from '@/lib/wrap-health'
 import { Button } from '@/components/ui/button'
 import {
@@ -154,6 +155,12 @@ export function FleetActions() {
     onError: (error: Error) => toast.error(error.message),
   })
 
+  // 顶栏四个操作（刷新/额度探测/全槽更新/重装内核）全是 admin 专属端点 ——
+  // 非管理员直接不渲染，避免给出点了必 403 的入口。
+  const me = useAuthStore((s) => s.me)
+  const isAdmin =
+    me?.role === 'admin' || !!me?.capabilities?.includes?.('*')
+  if (!isAdmin) return null
   return (
     <div className='hidden items-center gap-2 md:flex'>
       <Button

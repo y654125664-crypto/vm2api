@@ -29,9 +29,10 @@ export const PANEL_VIEWS = [
 ]
 
 const ROLE_VIEWS = {
-  // 供应商/号商视角：只看自己的号池与上号，不接触虚拟机运维概念。
-  // 底层仍走 vms/create + vms/import（pool 页自动编排并盖 owner 戳）。
-  user: ['pool', 'import', 'billing', 'logs'],
+  // 供应商/号商视角：只看自己的号池与计费，不接触虚拟机运维概念。
+  // 上号入口就是号池页的「上号」弹窗（底层 vms/create + vms/import 编排）；
+  // 旧「导入」页包着 admin 专属 dashboard 查询，对号商只会 403，不进菜单。
+  user: ['pool', 'billing', 'logs'],
   super: ['overview', 'cluster', 'usage', 'logs', 'vm'],
   admin: PANEL_VIEWS.slice(),
 }

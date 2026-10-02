@@ -1,1 +1,0 @@
-import{g as e}from"./button-Cbehlaek.js";import{n as t}from"./skeleton-W2LHZMXm.js";function n(n=!0){return t({queryKey:[`panel`,`me`],queryFn:()=>e(`/api/panel/me`),enabled:n,retry:!1})}export{n as t};
