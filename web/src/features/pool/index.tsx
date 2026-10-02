@@ -56,6 +56,15 @@ const OAUTH_METHODS = {
 } as const
 type OAuthMethod = keyof typeof OAUTH_METHODS
 
+// 伪装档（出站 system/persona 身份）。custom 是管理员在「system 提示词」页
+// 编辑的自定义模板，不对号商开放；留空 = 平台默认档。
+const DISGUISE_PRESETS = {
+  official: '官方 CC',
+  official_full: '官方全量',
+  zero: '零注入',
+} as const
+type DisguisePreset = keyof typeof DISGUISE_PRESETS
+
 /** 回调 URL 或裸 code#state → code。 */
 function parseOAuthCallback(text: string): string {
   const value = text.trim()
@@ -144,6 +153,7 @@ export function PoolPage() {
                 <TableHead>账号</TableHead>
                 <TableHead>凭据类型</TableHead>
                 <TableHead>出口 IP</TableHead>
+                <TableHead>伪装档</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>上次探测</TableHead>
               </TableRow>
@@ -151,7 +161,7 @@ export function PoolPage() {
             <TableBody>
               {items.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className='h-28 text-center'>
+                  <TableCell colSpan={7} className='h-28 text-center'>
                     <div className='text-muted-foreground'>
                       号池还是空的 —— 点右上角「上号」把第一个号导入
                     </div>
@@ -167,6 +177,9 @@ export function PoolPage() {
                   <TableCell>{CRED_LABEL(v)}</TableCell>
                   <TableCell className='text-muted-foreground'>
                     {PROXY_LABEL(v)}
+                  </TableCell>
+                  <TableCell className='text-muted-foreground'>
+                    {v.resolved_persona_preset || v.persona_preset || '平台默认'}
                   </TableCell>
                   <TableCell>
                     <PoolStatusBadge vm={v} />
@@ -330,6 +343,7 @@ function PoolImportDialog({
   const [creds, setCreds] = useState('')
   const [proxyMode, setProxyMode] = useState<'auto' | 'manual'>('auto')
   const [proxyLines, setProxyLines] = useState('')
+  const [disguise, setDisguise] = useState<'' | DisguisePreset>('')
   const [results, setResults] = useState<PoolImportResult[]>([])
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
@@ -342,6 +356,7 @@ function PoolImportDialog({
     setOauthPhase('form')
     setLinkInfo(null)
     setCallback('')
+    setDisguise('')
     setError('')
   }
 
@@ -512,6 +527,13 @@ function PoolImportDialog({
               method: 'DELETE',
             }).catch(() => undefined)
             vmId = imported.duplicate_of
+          }
+          // 2.5) 伪装档：新号位按选择设置；覆盖原号时保持原号身份不变。
+          if (disguise && check.action !== 'replace') {
+            await api(`/api/panel/vms/${encodeURIComponent(vmId)}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ persona_preset: disguise }),
+            })
           }
           // 3) 手动模式：按行 1:1 绑定粘贴的出口 IP。
           if (proxyMode === 'manual' && proxies[i]) {
@@ -757,6 +779,39 @@ function PoolImportDialog({
                 自动模式：从你导入的出口 IP 里按可用度挑一个绑到号上；没导入 IP 时走平台本地出口。
               </p>
             )}
+          </div>
+          <div className='space-y-1.5'>
+            <Label>伪装档</Label>
+            <div className='flex gap-2'>
+              <button
+                type='button'
+                onClick={() => setDisguise('')}
+                className={`rounded-md border px-3 py-1.5 text-sm ${
+                  disguise === ''
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'text-muted-foreground'
+                }`}
+              >
+                平台默认
+              </button>
+              {(Object.keys(DISGUISE_PRESETS) as DisguisePreset[]).map((p) => (
+                <button
+                  key={p}
+                  type='button'
+                  onClick={() => setDisguise(p)}
+                  className={`rounded-md border px-3 py-1.5 text-sm ${
+                    disguise === p
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'text-muted-foreground'
+                  }`}
+                >
+                  {DISGUISE_PRESETS[p]}
+                </button>
+              ))}
+            </div>
+            <p className='text-xs text-muted-foreground'>
+              出站 system/persona 身份档（官方 Claude Code 身份）。覆盖已有号时保持原号身份不变。
+            </p>
           </div>
           {error ? <p className='text-sm text-destructive'>{error}</p> : null}
           {results.length > 0 ? (
