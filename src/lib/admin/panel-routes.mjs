@@ -833,6 +833,40 @@ export function createPanelHandler(ctx) {
         const body = await readBody(req, 8192).catch(() => ({}))
         return json(res, 200, panel.ok(saveVendorSettings(panelUsers, body || {})))
       }
+      // GET /api/panel/vendor-usage?since=&until=&format=csv — vendor payout
+      // report (admin only; user role has no user-allowlisted path here).
+      if (req.method === 'GET' && p === '/api/panel/vendor-usage') {
+        const since = u.searchParams.get('since') || null
+        const until = u.searchParams.get('until') || null
+        const rows = requestLog.aggregateByOwner({ since, until }).map((r) => {
+          const rec = panelUsers.getById(r.owner_user_id)
+          const share = Number(rec?.vendor_share) || 0
+          return {
+            owner_user_id: r.owner_user_id,
+            username: rec?.username || r.owner_user_id,
+            enabled: rec?.enabled !== false,
+            vendor_share: share,
+            ...r,
+            vendor_payout: Math.round(r.total_cost * (share / 100) * 10000) / 10000,
+          }
+        })
+        if ((u.searchParams.get('format') || '').toLowerCase() === 'csv') {
+          const header = 'owner_user_id,username,requests,errors,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,total_cost,vendor_share,vendor_payout'
+          const lines = rows.map((r) =>
+            [r.owner_user_id, r.username, r.requests, r.errors, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens, r.total_cost, r.vendor_share, r.vendor_payout]
+              .map((v) => {
+                const s = String(v ?? '')
+                return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+              })
+              .join(','),
+          )
+          res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+          res.setHeader('Content-Disposition', 'attachment; filename="vendor-usage.csv"')
+          res.end([header, ...lines].join('\n') + '\n')
+          return true
+        }
+        return json(res, 200, panel.ok({ since, until, items: rows }))
+      }
       if (req.method === 'POST' && p === '/api/panel/users') {
         const body = await readBody(req, 8192).catch(() => ({}))
         try {

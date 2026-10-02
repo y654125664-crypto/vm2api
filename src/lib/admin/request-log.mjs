@@ -534,6 +534,11 @@ export class RequestLogStore {
     return this.repo.aggregate(opts)
   }
 
+  /** Per-owner totals for vendor payout reporting. */
+  aggregateByOwner(opts = {}) {
+    return this.repo.aggregateByOwner(opts)
+  }
+
   totals() {
     return this.repo.totals()
   }
