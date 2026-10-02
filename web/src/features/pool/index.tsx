@@ -48,6 +48,36 @@ const CRED_KIND_LABELS = {
 
 type CredKind = keyof typeof CRED_KIND_LABELS
 
+// OAuth 凭据的三种上号方式：直接粘贴会话令牌 / 授权链接换票（单号交互）/ 导入 RT。
+const OAUTH_METHODS = {
+  session: '会话令牌',
+  authlink: '授权链接',
+  rt: '导入 RT',
+} as const
+type OAuthMethod = keyof typeof OAUTH_METHODS
+
+/** 回调 URL 或裸 code#state → code。 */
+function parseOAuthCallback(text: string): string {
+  const value = text.trim()
+  if (!value) return ''
+  if (/^https?:/i.test(value)) {
+    const hashIndex = value.indexOf('#')
+    const hash = hashIndex >= 0 ? value.slice(hashIndex + 1) : ''
+    if (hash) {
+      const params = new URLSearchParams(hash.startsWith('code=') || hash.includes('=') ? hash : `code=${hash}`)
+      const fromHash = params.get('code') || params.get('state') || ''
+      if (fromHash) return fromHash.split('&')[0]
+    }
+    try {
+      const url = new URL(value)
+      return url.searchParams.get('code') || ''
+    } catch {
+      return ''
+    }
+  }
+  return value.includes('#') ? value.split('#')[0] : value
+}
+
 function splitLines(text: string): string[] {
   return text
     .split(/[\s,]+/)
@@ -288,6 +318,14 @@ function PoolImportDialog({
   onDone: () => Promise<unknown>
 }) {
   const [kind, setKind] = useState<CredKind>('oauth')
+  const [oauthMethod, setOauthMethod] = useState<OAuthMethod>('session')
+  const [oauthPhase, setOauthPhase] = useState<'form' | 'link'>('form')
+  const [linkInfo, setLinkInfo] = useState<{
+    vmId: string
+    sessionId: string
+    authUrl: string
+  } | null>(null)
+  const [callback, setCallback] = useState('')
   const [prefix, setPrefix] = useState('')
   const [creds, setCreds] = useState('')
   const [proxyMode, setProxyMode] = useState<'auto' | 'manual'>('auto')
@@ -300,7 +338,46 @@ function PoolImportDialog({
     setPrefix('')
     setCreds('')
     setProxyLines('')
+    setOauthMethod('session')
+    setOauthPhase('form')
+    setLinkInfo(null)
+    setCallback('')
     setError('')
+  }
+
+  async function exchangeNow() {
+    if (!linkInfo) return
+    const code = parseOAuthCallback(callback)
+    if (!code) {
+      setError('请粘贴回调 URL 或 code#state')
+      return
+    }
+    setPending(true)
+    try {
+      await api(
+        `/api/panel/vms/${encodeURIComponent(linkInfo.vmId)}/oauth/exchange-code`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            session_id: linkInfo.sessionId,
+            code,
+            flavor: 'claude_code',
+          }),
+        },
+      )
+      toast.success('换票完成，号已入池')
+      setCallback('')
+      setLinkInfo(null)
+      setOauthPhase('form')
+      setResults([])
+      setCreds('')
+      onOpenChange(false)
+      await onDone()
+    } catch (e) {
+      setError(importErrorMessage(e as Error))
+    } finally {
+      setPending(false)
+    }
   }
 
   async function onSubmit(event: React.FormEvent) {
@@ -314,6 +391,49 @@ function PoolImportDialog({
     const proxies = proxyMode === 'manual' ? splitLines(proxyLines) : []
     if (proxyMode === 'manual' && proxies.length === 0) {
       setError('手动模式需要粘贴出口 IP，每行一个')
+      return
+    }
+    // 授权链接换票：单号交互 —— 先建号位并生成 Claude 登录链接，粘回回调后再换票。
+    if (kind === 'oauth' && oauthMethod === 'authlink') {
+      setPending(true)
+      setResults([])
+      try {
+        const label = prefix.trim()
+          ? `${prefix.trim().replace(/[-_]+$/, '')}-01`
+          : ''
+        const created = await api<{ item?: Vm; id?: string }>(
+          '/api/panel/vms/create',
+          {
+            method: 'POST',
+            body: JSON.stringify(
+              label
+                ? { name: label, auto_allocate_proxy: proxyMode === 'auto' }
+                : { auto_allocate_proxy: proxyMode === 'auto' },
+            ),
+          },
+        )
+        const vmId = created?.item?.id ?? created?.id
+        if (!vmId) throw new Error('创建号位失败：未返回 vm id')
+        const link = await api<{ auth_url?: string; session_id?: string }>(
+          `/api/panel/vms/${encodeURIComponent(vmId)}/oauth/generate-auth-url`,
+          { method: 'POST', body: JSON.stringify({ flavor: 'claude_code' }) },
+        )
+        if (!link.auth_url) throw new Error('授权链接生成失败：未返回 auth_url')
+        setLinkInfo({
+          vmId,
+          sessionId: String(link.session_id || ''),
+          authUrl: String(link.auth_url),
+        })
+        setOauthPhase('link')
+        setResults([
+          { label: label || vmId, ok: true, message: '号位已建，等待换票' },
+        ])
+        await onDone()
+      } catch (e) {
+        setError(importErrorMessage(e as Error))
+      } finally {
+        setPending(false)
+      }
       return
     }
     setPending(true)
@@ -343,6 +463,13 @@ function PoolImportDialog({
           if (kind === 'apikey') {
             body.type = 'apikey'
             body.api_key = line
+          } else if (kind === 'oauth' && oauthMethod === 'rt') {
+            // RT 行格式：access_token|refresh_token（refresh 选填）
+            const [accessToken, refreshToken] = line.split('|')
+            if (!accessToken?.trim())
+              throw new Error('行格式应为 access_token|refresh_token')
+            body.access_token = accessToken.trim()
+            if (refreshToken?.trim()) body.refresh_token = refreshToken.trim()
           } else {
             if (kind === 'setup-token') {
               body.type = 'setup-token'
@@ -398,6 +525,72 @@ function PoolImportDialog({
       }}
     >
       <DialogContent className='max-w-lg'>
+        {oauthPhase === 'link' && linkInfo ? (
+          <div className='space-y-4'>
+            <DialogHeader>
+              <DialogTitle>授权链接换票</DialogTitle>
+              <DialogDescription>
+                打开链接完成 Claude
+                登录，回到回调页后把完整 URL 或 code#state 粘到这里。
+              </DialogDescription>
+            </DialogHeader>
+            <div className='rounded-md border p-2'>
+              <a
+                href={linkInfo.authUrl}
+                target='_blank'
+                rel='noreferrer'
+                className='text-sm text-primary underline'
+              >
+                {linkInfo.authUrl}
+              </a>
+            </div>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => {
+                void navigator.clipboard?.writeText(linkInfo.authUrl)
+                toast.success('链接已复制')
+              }}
+            >
+              复制链接
+            </Button>
+            <div className='space-y-1.5'>
+              <Label htmlFor='pool-callback'>回调 URL 或 code#state</Label>
+              <Input
+                id='pool-callback'
+                value={callback}
+                onChange={(e) => setCallback(e.target.value)}
+                autoComplete='off'
+                spellCheck={false}
+                placeholder='完整回调 URL 或 code#state'
+              />
+            </div>
+            {error ? <p className='text-sm text-destructive'>{error}</p> : null}
+            <DialogFooter>
+              <Button
+                type='button'
+                variant='outline'
+                onClick={() => {
+                  setOauthPhase('form')
+                  setLinkInfo(null)
+                  setError('')
+                }}
+              >
+                返回
+              </Button>
+              <Button
+                type='button'
+                className='flex-1'
+                onClick={exchangeNow}
+                disabled={!callback.trim() || pending}
+                loading={pending}
+              >
+                换票
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
         <form className='space-y-4' onSubmit={onSubmit}>
           <DialogHeader>
             <DialogTitle>上号</DialogTitle>
@@ -424,25 +617,59 @@ function PoolImportDialog({
               ))}
             </div>
           </div>
-          <div className='space-y-1.5'>
-            <Label htmlFor='pool-creds'>
-              {kind === 'apikey' ? 'API Key（每行一个）' : '凭据内容（每行一个号）'}
-            </Label>
-            <textarea
-              id='pool-creds'
-              className='w-full rounded-md border bg-transparent p-2 text-sm font-mono'
-              rows={4}
-              value={creds}
-              onChange={(e) => setCreds(e.target.value)}
-              autoComplete='off'
-              spellCheck={false}
-              placeholder={
-                kind === 'apikey'
-                  ? 'sk-ant-api03-...\nsk-ant-api03-...'
-                  : 'sk-ant-sid01-... 或 access token\n支持逗号 / 空格 / 换行分隔，自动去重'
-              }
-            />
-          </div>
+          {kind === 'oauth' ? (
+            <div className='space-y-1.5'>
+              <Label>OAuth 方式</Label>
+              <div className='flex gap-2'>
+                {(Object.keys(OAUTH_METHODS) as OAuthMethod[]).map((m) => (
+                  <button
+                    key={m}
+                    type='button'
+                    onClick={() => setOauthMethod(m)}
+                    className={`rounded-md border px-3 py-1.5 text-sm ${
+                      oauthMethod === m
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'text-muted-foreground'
+                    }`}
+                  >
+                    {OAUTH_METHODS[m]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {!(kind === 'oauth' && oauthMethod === 'authlink') ? (
+            <div className='space-y-1.5'>
+              <Label htmlFor='pool-creds'>
+                {kind === 'apikey'
+                  ? 'API Key（每行一个）'
+                  : kind === 'oauth' && oauthMethod === 'rt'
+                    ? '凭据内容（每行 access_token|refresh_token）'
+                    : '凭据内容（每行一个号）'}
+              </Label>
+              <textarea
+                id='pool-creds'
+                className='w-full rounded-md border bg-transparent p-2 text-sm font-mono'
+                rows={4}
+                value={creds}
+                onChange={(e) => setCreds(e.target.value)}
+                autoComplete='off'
+                spellCheck={false}
+                placeholder={
+                  kind === 'apikey'
+                    ? 'sk-ant-api03-...\nsk-ant-api03-...'
+                    : kind === 'oauth' && oauthMethod === 'rt'
+                      ? 'sk-ant-api03-...|sk-ant-oat01-...'
+                      : 'sk-ant-sid01-... 或 access token\n支持逗号 / 空格 / 换行分隔，自动去重'
+                }
+              />
+            </div>
+          ) : (
+            <p className='text-xs text-muted-foreground'>
+              授权链接模式：填号名前缀后提交，系统建号位并生成 Claude
+              登录链接，打开登录后把回调 URL 粘回来换票。一次上 1 个号。
+            </p>
+          )}
           <div className='space-y-1.5'>
             <Label htmlFor='pool-prefix'>号名前缀（选填）</Label>
             <Input
@@ -512,14 +739,23 @@ function PoolImportDialog({
             <Button
               type='submit'
               className='w-full'
-              disabled={!creds.trim() || pending}
+              disabled={
+                (kind === 'oauth' && oauthMethod === 'authlink'
+                  ? false
+                  : !creds.trim()) || pending
+              }
               loading={pending}
             >
               <HardDriveUpload />
-              {pending ? '入池中…' : `导入号池${splitLines(creds).length > 1 ? `（${splitLines(creds).length} 个号）` : ''}`}
+              {pending
+                ? '入池中…'
+                : kind === 'oauth' && oauthMethod === 'authlink'
+                  ? '建号并生成授权链接'
+                  : `导入号池${splitLines(creds).length > 1 ? `（${splitLines(creds).length} 个号）` : ''}`}
             </Button>
           </DialogFooter>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   )
