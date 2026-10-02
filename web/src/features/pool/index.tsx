@@ -347,6 +347,7 @@ function PoolImportDialog({
   const [results, setResults] = useState<PoolImportResult[]>([])
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const proxyQ = useQuery(proxiesQueryOptions())
 
   const reset = () => {
     setPrefix('')
@@ -398,6 +399,17 @@ function PoolImportDialog({
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError('')
+    // 自动模式前置校验：凭据转换必须经过出口 SOCKS5，池里没有 IP 就不建号位
+    //（否则每行失败都会留下空号位吃自建配额）。
+    const ownProxies = (proxyQ.data?.proxies ?? []).filter(
+      (p) => p.kind !== 'local' && p.enabled !== false,
+    )
+    if (proxyMode === 'auto' && ownProxies.length === 0) {
+      setError(
+        '自动模式需要先有出口 IP：在「出口 IP」卡片导入 SOCKS5，或切手动模式逐行粘贴'
+      )
+      return
+    }
     const lines = splitLines(creds)
     if (lines.length === 0) {
       setError('请填写凭据内容（支持多行批量）')
@@ -479,7 +491,8 @@ function PoolImportDialog({
             setResults([...outcomes])
             continue
           }
-          // 1) 建号位：服务端盖 owner 戳 + 吃自建配额 + 自动从我的代理池分配出口。
+          // 1) 建号位：服务端盖 owner 戳 + 吃自建配额 + 自动从我的代理池分配出口；
+          //    伪装档在创建时一次定档（号位 persona_preset）。
           if (check.action === 'replace' && check.vm_id) {
             vmId = check.vm_id
           } else {
@@ -487,14 +500,15 @@ function PoolImportDialog({
               '/api/panel/vms/create',
               {
                 method: 'POST',
-                body: JSON.stringify(
-                  label
-                    ? { name: label, auto_allocate_proxy: proxyMode === 'auto' }
-                    : { auto_allocate_proxy: proxyMode === 'auto' },
-                ),
+                body: JSON.stringify({
+                  ...(label ? { name: label } : {}),
+                  auto_allocate_proxy: proxyMode === 'auto',
+                  ...(disguise ? { persona_preset: disguise } : {}),
+                }),
               },
             )
-            vmId = created?.item?.id ?? created?.id
+            const vmObj = (created as { vm?: Vm })?.vm
+            vmId = created?.item?.id ?? created?.id ?? vmObj?.id
             if (!vmId) throw new Error('创建号位失败：未返回 vm id')
           }
           // 2) 导入凭据（字段映射对齐 vm/credential-panel.tsx）。
@@ -528,13 +542,7 @@ function PoolImportDialog({
             }).catch(() => undefined)
             vmId = imported.duplicate_of
           }
-          // 2.5) 伪装档：新号位按选择设置；覆盖原号时保持原号身份不变。
-          if (disguise && check.action !== 'replace') {
-            await api(`/api/panel/vms/${encodeURIComponent(vmId)}`, {
-              method: 'PATCH',
-              body: JSON.stringify({ persona_preset: disguise }),
-            })
-          }
+          // 2.5) 覆盖已有号时保持原号身份不变（伪装档只在创建时定档）。
           // 3) 手动模式：按行 1:1 绑定粘贴的出口 IP。
           if (proxyMode === 'manual' && proxies[i]) {
             await api('/api/panel/proxies/import', {

@@ -97,6 +97,7 @@ import {
   resolveImportDuplicate,
 } from './credential-fingerprint.mjs'
 import { logsToCsv, logsToJsonl } from './request-log.mjs'
+import { PERSONA_PRESETS } from '../identity/persona-template.mjs'
 import {
   listVms,
   getVm,
@@ -2671,6 +2672,20 @@ export function createPanelHandler(ctx) {
         } else {
           vm.owner_user_id = null
           vm.origin = VM_ORIGIN.platform
+        }
+        // 伪装档：建号位时一次定档（号商限官方三档；custom 是管理员 system 页概念）。
+        const requestedPreset = String(body.persona_preset || '').trim()
+        if (requestedPreset) {
+          const allowed = ident.role === 'user'
+            ? ['official', 'official_full', 'zero']
+            : [...PERSONA_PRESETS, '']
+          if (!allowed.includes(requestedPreset)) {
+            return json(res, 400, {
+              ok: false,
+              error: { type: 'invalid_request_error', code: 'invalid_persona_preset', message: '伪装档不合法' },
+            })
+          }
+          vm.persona_preset = requestedPreset
         }
         if (nodeId) vm.node_id = nodeId
         stampVmKind(vm, body)

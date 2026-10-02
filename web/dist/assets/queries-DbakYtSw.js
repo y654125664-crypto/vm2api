@@ -1,0 +1,1 @@
+import{g as e}from"./button-Cbehlaek.js";import{n as t}from"./skeleton-DXXGwJrk.js";function n(n=`vm`){return t({queryKey:[`panel`,`billing`,n],queryFn:()=>e(`/api/panel/billing?group_by=${encodeURIComponent(n)}`)})}export{n as t};
